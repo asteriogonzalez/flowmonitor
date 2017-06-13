@@ -19,12 +19,11 @@ import os
 import re
 import time
 import datetime
-import logging
 import sqlite3
 import threading
-from collections import namedtuple
+import logging
 from logging import info as loginfo
-
+from collections import namedtuple
 from watchdog.observers import Observer
 from watchdog.events import FileMovedEvent, \
      FileSystemEventHandler, LoggingEventHandler
