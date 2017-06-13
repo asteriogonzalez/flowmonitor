@@ -3,4 +3,7 @@ This module allows you to monitorize the file system looking for changes and fir
 
 ### Example:
 
-  $ flowmonitor.py pelican . pelican ~/Documents/blog
+  $ flowmonitor.py pelican . pytest . pelican ~/Documents/blog
+
+
+Will monitorize . with a pelican handler and pytest handler and ~/Documents/blog with another pelican handler as well.
