@@ -49,7 +49,7 @@ Not finished yet. The idea is to launch `py.test` when there is some time since 
 
 ### Command line Example:
 
-  $ flowmonitor.py pelican . pytest . pelican ~/Documents/blog
+`$ flowmonitor.py pelican . pytest . pelican ~/Documents/blog`
 
 
 Will monitorize . with a pelican handler and pytest handler and ~/Documents/blog with another pelican handler as well.
