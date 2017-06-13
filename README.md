@@ -1,6 +1,13 @@
 # flowmonitor
 This module allows you to monitorize the file system looking for changes and fires actions based on user handlers that are attached to the flow core.
 
+## Events
+
+Events are `created`, `modified`, `moved` and `deleted` file or directories.
+
+Another useful event is `quite` that will be fired once when an specific elapsed time has passed after last modification of the monitorized tree. This event can be setup for long term processes.
+
+
 ## Handler Plugings
 
 ###  Pelican for (.md) markdown files
@@ -36,13 +43,8 @@ For instance taking `templates/blog/book.sumary.md` as an example, the yields to
 
 ###  PyTest for (.py) test files
 
-Not finished yet. The idea is to launch py.test when a file is changed.
+Not finished yet. The idea is to launch `py.test` when there is some time since any file is changed.
 
-## Events
-
-Events are `created`, `modified`, `moved` and `deleted` file or directories.
-
-Another useful event is `quite` that will be fired once when an specific elapsed time has passed after last modification of the monitorized tree. This event can be setup for long term processes.
 
 
 ### Command line Example:
