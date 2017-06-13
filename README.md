@@ -32,8 +32,17 @@ the plugin will select the `templates/blog/book.sumary.md` template as its has m
 
 Note than Tokens are any piece of information in the relative path
 
-For instance taking `templates/blog/book.sumary.md` as an example, the yields tokens are: `blog`, `book`, `summary` and `md` as available matching information.
+For instance taking `templates/blog/book.sumary.md` as an example, the yields tokens are: `blog`, `book`, `summary` and `md` for available matching information.
 
+###  PyTest for (.py) test files
+
+Not finished yet. The idea is to launch py.test when a file is changed.
+
+## Events
+
+Events are `created`, `modified`, `moved` and `deleted` file or directories.
+
+Another useful event is `quite` that will be fired once when an specific elapsed time has passed after last modification of the monitorized tree. This event can be setup for long term processes.
 
 
 ### Command line Example:
