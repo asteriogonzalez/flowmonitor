@@ -11,6 +11,8 @@ Example:
 
 TODO:
     * Be ready for huge changes (e.g. swaping git branches)
+    * Manage .rst files in PelicanHandler
+    * Remove remote files that doesn't match the rules anymore
 
 """
 import sys
@@ -18,15 +20,21 @@ import random
 import os
 import re
 import time
+import types
 import datetime
 import sqlite3
 import threading
 import logging
-from logging import info as loginfo
+from logging import info as loginfo, warning as logwarning
+import subprocess
+import hashlib
 from collections import namedtuple
+from multiprocessing import Process
 from watchdog.observers import Observer
-from watchdog.events import FileMovedEvent, \
+from watchdog.events import FileSystemMovedEvent, \
      FileSystemEventHandler, LoggingEventHandler
+import yaml
+
 # from cjson import encode, decode
 
 # from queuelib import FifoDiskQueue, PriorityQueue
@@ -74,6 +82,58 @@ def split_string(line):
     return tokens
 
 
+def split_liststr(data):
+    "Split a string into CSV list"
+    if isinstance(data, types.StringTypes):
+        info = list()
+        for ext in data.split(','):
+            info.append(ext.strip())
+        return info
+    return data
+
+
+def are_equals(source, target):
+    """
+    Asume both files exists
+    """
+    info_source = os.stat(source)
+    info_target = os.stat(target)
+
+    if info_source.st_size != info_target.st_size:
+        return False
+
+    # check sha1
+    m_source = hashlib.sha1()
+    with file(source, 'r') as f:
+        m_source.update(f.read())
+    m_target = hashlib.sha1()
+    with file(target, 'r') as f:
+        m_target.update(f.read())
+
+    return m_source.digest() == m_target.digest()
+
+primitives = (int, str, bool, unicode, list, dict, float)
+
+
+class Persistent(object):
+    """Base class for persistence"""
+
+    def __getstate__(self):
+        cfg = dict()
+        for key, value in self.__dict__.items():
+            if key.startswith('_'):
+                continue
+            if not (isinstance(value, primitives) or
+                    issubclass(value.__class__, primitives)):
+                continue
+
+            cfg[key] = value
+        return cfg
+
+    def __setstate__(self, cfg):
+        self.__dict__.update(cfg)
+
+
 class DBQueue(object):
     """This class provide a Persiste Queue for events using sqlite.
 
@@ -88,10 +148,7 @@ class DBQueue(object):
 
     def close(self):
         """Clear the processed event and close connections with database"""
-        self.conn.execute("""
-        DELETE FROM events
-        WHERE countdown <= 0
-        """)
+        self.clean()
 
         for conn in self.conn__.values():
             try:
@@ -99,6 +156,13 @@ class DBQueue(object):
                 conn.close()
             except sqlite3.ProgrammingError:
                 pass
+
+    def clean(self):
+        "Clean the processed event queue"
+        self.conn.execute("""
+                DELETE FROM events
+                WHERE countdown <= 0
+                """)
 
     @property
     def conn(self):
@@ -180,6 +244,19 @@ class DBQueue(object):
 
         self.ignored__[event_key(event)] = event
 
+    def get_last_event(self, since=None):
+        """Get the older event in queue"""
+        cursor = self.conn.cursor()
+        since = since or time.time()
+        cursor.execute("""
+        SELECT * FROM events
+        WHERE date < ? AND countdown <= 0
+        ORDER BY date DESC LIMIT 1""", (since, ))
+        raw = cursor.fetchone()
+        if raw:
+            event = Event(*raw)
+            return event
+
     def __create_squema__(self):
         scheme = ["""CREATE TABLE IF NOT EXISTS events
      (date integer, path text, event text, folder integer,
@@ -199,13 +276,15 @@ class DBQueue(object):
         conn.commit()
 
 
-class Flow(object):
+class Flow(Persistent):
     """This class implements the core for event flows and processing.
 
     Need a queue instance that support persistent storage and some
     handlers that accepts and process some events.
 
     """
+    CFG_NAME = 'flow.yaml'
+
     def __init__(self, queue):
         """This class needs a external queue to manage persistent events
         then creates:
@@ -222,6 +301,9 @@ class Flow(object):
         self.observer.start()
         self.monitor = EventMonitor(self)
         self.handlers = list()
+        self.eventpolling = 0.2
+        self.idlecycles = 50
+        self.configfile = ''
 
     def run(self):
         """Main loop of the process.
@@ -234,23 +316,17 @@ class Flow(object):
         # event_handler = LoggingEventHandler()
         # observer.schedule(event_handler, path, recursive=True)
         # t0 = time.time()
+        loginfo('Saving configuration file')
+        self.save_config()
+
         loginfo('Start flow monitor')
 
         try:
             while True:
-                time.sleep(0.2)  # non-locker style
-                event = self.queue.pop()
-                if event is not None:
-                    try:
-                        for handler in self.handlers:
-                            if event.path.startswith(handler.path) and \
-                               handler.match(event):
-                                handler.process(event)
-                    except Exception, why:
-                        print why
-                        self.queue.restart(event)
-                    else:
-                        self.queue.finish(event)
+                for counter in xrange(self.idlecycles):
+                    time.sleep(self.eventpolling)  # non-locker style
+                    self.next()
+                self.idle()
 
         except KeyboardInterrupt:
             loginfo('User Keyboard interrupt')
@@ -272,6 +348,86 @@ class Flow(object):
         loginfo('Add handler: %s on %s' % (handler.__class__.__name__,
                                            handler.path))
 
+    def next(self):
+        "Try to execute the next event in queue"
+        event = self.queue.pop()
+        if event is None:
+            pass
+        else:
+            try:
+                for handler in self.handlers:
+                    if event.path.startswith(handler.path) and \
+                       handler.match(event):
+                        handler.process(event)
+            except Exception, why:
+                logwarning(why)
+                self.queue.restart(event)
+            else:
+                self.queue.finish(event)
+
+    def idle(self):
+        "Performs tasks that suit in idle loops from time to time"
+        now = time.time()
+        event = self.queue.get_last_event(now - 10)
+        if event:
+            print "Do something idle ..."
+            for handler in self.handlers:
+                handler.on_idle()
+
+    def save_config(self, configfile=None):
+        """Save internal config to a file"""
+        self.configfile = configfile or self.CFG_NAME
+
+        cfg = self.__getstate__()
+
+        handlers = cfg['handlers'] = list()
+
+        for handler in self.handlers:
+            handlers.append([handler.__class__.__name__,
+                             handler.__getstate__()])
+
+        with file(self.configfile, 'w') as f:
+            f.write(yaml.safe_dump(cfg))
+
+    def load_config(self, configfile=None):
+        """Load config from file and create the needed handlers"""
+        self.configfile = configfile or self.CFG_NAME
+
+        if os.path.exists(self.configfile):
+            with file(self.configfile, 'r') as f:
+                cfg = yaml.safe_load(f.read())
+
+            if cfg:
+                for klass, state in cfg.pop('handlers'):
+                    print klass, state
+                    instance = handlers[klass](**state)
+                    self.add(instance)
+
+                self.__setstate__(cfg)
+
+                return True
+
+    def config(self, configfile=None):
+        "A simple example config"
+
+        if self.load_config(configfile):
+            return
+
+        args = list(sys.argv[1:])
+        if len(args) <= 0:
+            raise RuntimeError(
+                'You need to specify al least one plugin handler')
+
+        while args:
+            name = args.pop(0)
+            klass = handlers.get(name)
+            if klass is None:
+                raise RuntimeError('Unknown handler %s' % name)
+            n = klass.__init__.im_func.func_code.co_argcount - 1
+            init_args, args = args[:n], args[n:]
+            handler = klass(*init_args)
+            self.add(handler)
+
 
 class EventMonitor(FileSystemEventHandler):
     """Logs all the events captured."""
@@ -281,7 +437,7 @@ class EventMonitor(FileSystemEventHandler):
 
     def on_any_event(self, event):
         now = time.time()
-        if event.__class__ == FileMovedEvent:
+        if isinstance(event, FileSystemMovedEvent):
             ev, path2, path, folder = event.key
         else:
             ev, path, folder = event.key
@@ -296,21 +452,27 @@ class EventMonitor(FileSystemEventHandler):
                     flow.queue.push(ev)
 
 
-class EventHandler(object):
+class EventHandler(Persistent):
     "Base class for all EventHandlers"
-    def __init__(self, path):
+    def __init__(self, path, extensions):
         """Base class for any event handler.
 
         Args:
             path (:obj:`string`, ): The `path` for monitoring into.
         """
         path = os.path.expanduser(path)
-        self.path = os.path.abspath(path)
         self.flow = None
+
+        self.path = os.path.abspath(path)
+        self.extensions = split_liststr(extensions)
 
     def match(self, event):
         "Determine if we can handle this event"
-        return True
+        return self._match(event.path)
+
+    def _match(self, filename):
+        ext = os.path.splitext(filename)[-1]
+        return ext in self.extensions
 
     def process(self, event):
         """Search for a `on_xxxx` method that will handle the event
@@ -320,6 +482,17 @@ class EventHandler(object):
         func = getattr(self, func_name, None)
         if func:
             func(event)
+
+    def make(self, event):
+        """Execute a external process that 'makes' the goal
+        of the handler.
+
+        The event is passed as a reference.
+        """
+        return True
+
+    def on_idle(self):
+        "Performs idle tasks"
 
 
 class PelicanHandler(EventHandler):
@@ -336,13 +509,8 @@ class PelicanHandler(EventHandler):
                              re.MULTILINE | re.DOTALL | re.IGNORECASE)
     _re_templates = re.compile(r'.*template|templates.*', re.I | re.DOTALL)
 
-    def __init__(self, path):
-        EventHandler.__init__(self, path)
-        # self.templates = dict()
-
-    def match(self, event):
-        "Determine if we can handle this event"
-        return event.path.endswith('.md')
+    def __init__(self, path, extensions='.md'):
+        EventHandler.__init__(self, path, extensions)
 
     def on_created(self, event):
         "Fired when a new file is created"
@@ -352,6 +520,7 @@ class PelicanHandler(EventHandler):
 
             lines = self.find_template(event)
             self.write_file(event, lines)
+            self.make(event)
 
     def on_modified(self, event):
         "Fired when a file is modified somehow"
@@ -365,6 +534,7 @@ class PelicanHandler(EventHandler):
             .strftime('%Y-%m-%d %H:%M')
 
         self.update_headers(event, replace)
+        self.make(event)
 
     def on_moved(self, event):
         "Fired when a file is renamed of moved"
@@ -421,6 +591,125 @@ class PelicanHandler(EventHandler):
 
         return lines
 
+    def make(self, event):
+        """Update the output contents for pelican.
+
+        The event is passed as a reference.
+        """
+        args = ['pelican']
+        proc = subprocess.Popen(args, cwd=self.path)
+
+        proc.wait()
+        return proc.returncode
+
+
+class SyncHandler(EventHandler):
+    """This class manage two or more trees to propagate changes
+    across them.
+
+    There have two methods:
+
+    - Fast: uses the database queue to select only then know archives
+            but may lack some files if flow was down when changes happened.
+
+    - Deep: explore all file system tree
+
+    The matching rules can be describe as a sequences of regular expressions
+    that any file matching any of them, will be synchronized.
+    """
+
+    def __init__(self, path, extensions='.md', remotes='/tmp/remote',
+                 rules=r'Tags:\s*.*\W+(foo)\W+.*', location='ai',
+                 delete_missing=False):
+        EventHandler.__init__(self, path, extensions)
+        self.rules = split_liststr(rules)
+        self.remotes = split_liststr(remotes)
+        self.location = split_liststr(location)
+        self.delete_missing = delete_missing
+
+    # def add_rule(self, regexp):
+        # self.rules.append(regexp)
+        # self._rules.append(re.compile(regexp))
+
+    def on_idle(self):
+        "Performs syncing tasks"
+
+        print "Idle on syncing"
+        # p = Process(target=self.sync)
+        # p.start()
+        # p.join()
+        self.sync()  # for debugging
+
+    def sync(self):
+        """Sync files that match criteria and remove any remote
+        file that must not be there."""
+        loginfo("Start Sync")
+        # sync files to add
+        for root, folders, files in os.walk(self.path):
+            for name in files:
+                filename = os.path.join(root, name)
+                if self._match(filename):
+                    if self.match_content(filename):
+                        self.sync_one_file(filename)
+
+        # sync files that must be deleted
+        for remote in self.remotes:
+            self.delete_not_matched(remote)
+
+    def match_content(self, filename):
+        """Analize file content that match any of the given rules."""
+        intersection = set(self.location).intersection(
+            split_string(os.path.dirname(filename)))
+        if intersection:
+            return intersection
+
+        with file(filename, 'rt') as f:
+            for line in f.readlines():
+                for regexp in self.rules:
+                    m = re.match(regexp, line)
+                    if m:
+                        return m
+
+    def sync_one_file(self, filename):
+        """Try to sync a file into all remote folders."""
+        relative_path = filename.split(self.path)[-1]
+        for remote in self.remotes:
+            target = remote + relative_path
+            parent = os.path.dirname(target)
+            if not os.path.exists(parent):
+                os.makedirs(parent)
+
+            if os.path.exists(target) and \
+               are_equals(filename, target):
+                continue
+
+            loginfo('Sync %s -> %s' % (filename, target))
+            with file(filename, 'r') as f_in:
+                with file(target, 'w') as f_out:
+                    f_out.write(f_in.read())
+
+    def delete_not_matched(self, remote):
+        """Explore remote folder for files that match criteria"""
+        for root, folders, files in os.walk(remote):
+            for name in files:
+                filename = os.path.join(root, name)
+                if self._match(filename):
+                    self.delete_one_file(remote, filename)
+
+    def delete_one_file(self, remote, filename):
+        """Check for local file deletion based on remote file path
+        that match criteria."""
+        relative_path = filename.split(remote)[-1]
+        source = self.path + relative_path
+
+        if self.delete_missing and \
+           not os.path.exists(source):
+            os.unlink(filename)
+            return
+
+        if not self.match_content(source):
+            os.unlink(filename)
+
 
 class PyTestHandler(EventHandler):
     """A simple Handler dummy class intended to launch py.tests
@@ -432,22 +721,9 @@ class PyTestHandler(EventHandler):
         return event.path.endswith('.py')
 
 
-def config(flow):
-    "A simple example config"
-
-    args = list(sys.argv[1:])
-    while args:
-        name = args.pop(0)
-        klass = handlers.get(name)
-        if klass is None:
-            raise RuntimeError('Unknown handler %s' % name)
-        n = klass.__init__.im_func.func_code.co_argcount - 1
-        init_args, args = args[:n], args[n:]
-        handler = klass(*init_args)
-        flow.add(handler)
-
 # register this module Handlers
 register_handler(PelicanHandler)
+register_handler(SyncHandler)
 register_handler(PyTestHandler)
 
 if __name__ == "__main__":
@@ -459,5 +735,7 @@ if __name__ == "__main__":
 
     queue = DBQueue()
     flow = Flow(queue)
-    config(flow)
+
+    flow.config()
+
     flow.run()
