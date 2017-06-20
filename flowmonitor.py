@@ -28,6 +28,7 @@ import logging
 from logging import info as loginfo, warning as logwarning
 import subprocess
 import hashlib
+from getpass import getuser
 from collections import namedtuple
 from multiprocessing import Process
 from watchdog.observers import Observer
@@ -519,8 +520,8 @@ class PelicanHandler(EventHandler):
             loginfo('Fill %s from template' % event.path)
 
             lines = self.find_template(event)
-            self.write_file(event, lines)
-            self.make(event)
+            if lines:
+                self.update_contents(event, lines)
 
     def on_modified(self, event):
         "Fired when a file is modified somehow"
@@ -528,13 +529,9 @@ class PelicanHandler(EventHandler):
         if info.st_size <= 0:
             return self.on_created(event)
 
-        replace = dict()
-        t = (event.date // 300) * 300
-        replace['Modified'] = datetime.datetime.fromtimestamp(t) \
-            .strftime('%Y-%m-%d %H:%M')
-
-        self.update_headers(event, replace)
-        self.make(event)
+        with file(event.path, 'rt') as f:
+            lines = f.readlines()
+            self.update_contents(event, lines)
 
     def on_moved(self, event):
         "Fired when a file is renamed of moved"
@@ -544,20 +541,47 @@ class PelicanHandler(EventHandler):
         "Fired when a file is deleted"
         pass
 
-    def update_headers(self, event, replace):
-        "Replace some file headers and write down the new content"
-        lines = []
-        with file(event.path, 'rt') as f:
-            for line in f.readlines():
-                m = self._re_headers.match(line)
-                if m:
-                    value = replace.get(m.groupdict().get('name'))
-                    if value is not None:
-                        line = self._re_headers.sub(
-                            r'\g<name>: %s\n' % value, line)
-                lines.append(line)
+    def update_contents(self, event, lines):
+        """Update headers and variables of each file line"""
+        headers = dict()
+        t = (event.date // 300) * 300
+        headers['Modified'] = datetime.datetime.fromtimestamp(t) \
+            .strftime('%Y-%m-%d %H:%M')
+        self.update_headers(lines, headers)
 
-            self.write_file(event, lines)
+        if not self._re_templates.match(event.path):
+            replace = dict()
+            replace[r'\$random\$'] = (random.randint, 0, 1000)
+            replace[r'\$date\$'] = headers['Modified']
+            replace[r'\$user\$'] = getuser()
+            self.update_replacements(lines, replace)
+
+        self.write_file(event, lines)
+        self.make(event)
+
+    def update_headers(self, lines, replace):
+        "Replace some file headers and write down the new content"
+        for i, line in enumerate(lines):
+            m = self._re_headers.match(line)
+            if m:
+                value = replace.get(m.groupdict().get('name'))
+                if value is not None:
+                    line = self._re_headers.sub(
+                        r'\g<name>: %s\n' % value, line)
+                    lines[i] = line
+
+    def update_replacements(self, lines, replace):
+        "Replace some file headers and write down the new content"
+        for i, line in enumerate(lines):
+            for regex, value in replace.items():
+                m = re.search(regex, line)
+                if m:
+                    if isinstance(value, types.TupleType):
+                        value = value[0](*value[1:])
+                    if not isinstance(value, types.StringTypes):
+                        value = str(value)
+                    line = re.sub(regex, value, line)
+                    lines[i] = line
 
     def write_file(self, event, lines):
         """Write a text file having all the lines.
@@ -662,6 +686,9 @@ class SyncHandler(EventHandler):
             split_string(os.path.dirname(filename)))
         if intersection:
             return intersection
+
+        if not os.path.exists(filename):
+            return
 
         with file(filename, 'rt') as f:
             for line in f.readlines():
