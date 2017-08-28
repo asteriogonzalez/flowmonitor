@@ -892,6 +892,47 @@ def test():
             print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
 
 
+    pending_group = dict()
+    for task in pending_task:
+        tags = task.tags
+        tags.sort()
+        tags = ' '.join(tags)
+        grp = pending_group.setdefault(tags, list())
+        grp.append(task)
+
+
+    done_group = dict()
+    for task in done_task:
+        tags = task.tags
+        tags.sort()
+        tags = ' '.join(tags)
+        grp = done_group.setdefault(tags, list())
+        grp.append(task)
+
+
+
+    # prepare Jinja template
+    from jinja2 import Environment, PackageLoader, select_autoescape
+    env = Environment(
+        loader=PackageLoader('flowmonitor', '.'),
+        autoescape=select_autoescape(['html', 'xml'])
+    )
+    template = env.get_template('template.md')
+
+    # prepare context for rendering
+    context = locals()
+    context['len'] = list.__len__
+
+    # render
+    output =  template.render(locals())
+    # output = output.replace('\n\n', '\n')
+
+    # save to dashboard Markdown file
+    dashboard = '~/Documents/tpom/content/dashboard.md'
+    dashboard = exppath(dashboard)
+    with codecs.open(dashboard, 'w', 'utf-8') as f:
+        f.write(output)
+
 
 
     foo = 1
