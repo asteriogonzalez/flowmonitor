@@ -62,5 +62,5 @@ will monitorize folder `.` with a `pelican` and `pytest` handlers and `~/Documen
 
 ## Dependences
 
-`pip install watchdog`
+`sudo pip install watchdog`
 
