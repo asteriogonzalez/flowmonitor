@@ -59,3 +59,8 @@ As an example:
 
 
 will monitorize folder `.` with a `pelican` and `pytest` handlers and `~/Documents/blog` with another `pelican` handler as well.
+
+## Dependences
+
+`pip install watchdog`
+
