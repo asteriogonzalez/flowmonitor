@@ -15,26 +15,29 @@ TODO:
     * Remove remote files that doesn't match the rules anymore
 
 """
-import sys
-import random
-import os
-import re
-import time
-import types
+import codecs
+from collections import namedtuple
 import datetime
-import sqlite3
-import threading
+from getpass import getuser
+import hashlib
 import logging
 from logging import info as loginfo, warning as logwarning
-import subprocess
-import hashlib
-from getpass import getuser
-from collections import namedtuple
 from multiprocessing import Process
+import os
+from pprint import pprint
+import random
+import re
+import sys
+import threading
+import time
+import types
+import sqlite3
+import subprocess
+import yaml
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemMovedEvent, \
      FileSystemEventHandler, LoggingEventHandler
-import yaml
 
 # from cjson import encode, decode
 
@@ -64,8 +67,17 @@ def event_key(event):
     "Provide a unique tuple that can be used as key for the event"
     return event.path, event.folder
 
+
+Task = namedtuple('Task', ('done', 'text', 'fields', 'tags', 'filename'))
+
+
 re_split = re.compile(r'\W*(\w+)\W*(.*)$')
 
+def exppath(path):
+    path = os.path.expanduser(path)
+    path = os.path.expandvars(path)
+    path = os.path.abspath(path)
+    return path
 
 def split_string(line):
     "Split a string into tokens"
@@ -758,7 +770,116 @@ register_handler(PelicanHandler)
 register_handler(SyncHandler)
 register_handler(PyTestHandler)
 
+def fileiter(path, regexp):
+    if isinstance(regexp, types.StringTypes):
+        regexp = re.compile(regexp, re.DOTALL | re.VERBOSE)
+
+    for root, _, files in os.walk(exppath(path)):
+        for name in files:
+            filename = os.path.join(root, name)
+            if regexp.match(filename):
+                yield filename
+
+def collect_info(filename):
+    field = dict()
+    tasks = list()
+
+    re_task = re.compile(r'-\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
+
+    f = codecs.open(filename, 'r', 'utf-8')
+    for line in f.readlines():
+        # fields
+        m = PelicanHandler._re_headers.match(line)
+        if m:
+            k, v = m.groups()
+            field[k.lower()] = v
+        # tasks
+        m = re_task.match(line)
+        if m:
+            tasks.append(m.groups())
+            # done, text = m.groups()
+            # tasks.append((done.strip().lower(), text))
+
+    return field, tasks
+
+def metainfo(filename):
+    field, tasks = collect_info(filename)
+    tags = [t.strip() for t in field.get('tags', '').lower().split(',')]
+    return field, tags, tasks
+
+def task_iterator(meta):
+    for filename, info in meta.items():
+        fields, tags, tasks = info
+        for done, text in tasks:
+            yield Task(done, text, fields, tags, filename)
+
+
+def sort_task(meta, field):
+    field = field.lower()
+    tasks = [t for t in task_iterator(meta)]
+    def sort(a, b):
+        va = a.fields.get(field)
+        vb = b.fields.get(field)
+        if va is None:
+            return -1
+        if vb is None:
+            return 1
+
+        return cmp(va, vb)
+    tasks.sort(sort)
+    return tasks
+
+def group_task(tasks, field, ranges):
+    # split into groups
+    groups = list()
+    for r in ranges:
+        grp = list()
+        while tasks:
+            if tasks[0].fields[field] < r:
+                grp.append(tasks.pop(0))
+            else:
+                break
+        groups.append(grp)
+
+    groups.append(tasks)
+    return groups
+
+def filter_tasks(tasks, field, criteria):
+    result = [t for t in tasks]
+
+
+def test():
+    meta = dict()
+    for filename in fileiter('~/Documents/tpom/content', '.*md'):
+        meta[filename] = metainfo(filename)
+
+    # tasks = sort_task(meta, 'Modified')
+    ranges = ['2017-07-01 00:00', '2017-08-01 00:00', '2017-08-20 00:00']
+
+    sort_field = 'date'
+    tasks = sort_task(meta, sort_field)
+
+    groups = group_task(tasks, sort_field, ranges)
+
+
+
+    for grp in groups:
+        print "-" * 70
+        for task in grp:
+            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+
+    foo = 1
+
+
+
+
+
+
+
 if __name__ == "__main__":
+    test()
+    sys.exit()
+
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
