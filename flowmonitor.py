@@ -411,14 +411,16 @@ class Flow(Persistent):
     def config(self, configfile=None):
         "A simple example config"
 
-        if self.load_config(configfile):
-            return
-
         args = list(sys.argv[1:])
         if len(args) <= 0:
+            # try to load last configuration used
+            if self.load_config(configfile):
+                return
+        elif not args:
             raise RuntimeError(
                 'You need to specify al least one plugin handler')
 
+        # use command line settings
         while args:
             name = args.pop(0)
             klass = handlers.get(name)
@@ -462,6 +464,9 @@ class EventHandler(Persistent):
             path (:obj:`string`, ): The `path` for monitoring into.
         """
         path = os.path.expanduser(path)
+        if not os.path.exists(path):
+            raise OSError("%s path does not exits" % path)
+
         self.flow = None
 
         self.path = os.path.abspath(path)
