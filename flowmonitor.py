@@ -832,6 +832,7 @@ def sort_task(meta, field):
 def group_task(tasks, field, ranges):
     # split into groups
     groups = list()
+    tasks = list(tasks)
     for r in ranges:
         grp = list()
         while tasks:
@@ -845,7 +846,14 @@ def group_task(tasks, field, ranges):
     return groups
 
 def filter_tasks(tasks, field, criteria):
-    result = [t for t in tasks]
+    result = [t for t in tasks if criteria(t)]
+    return result
+
+def pending(task):
+    return task.done == ' '
+
+def done(task):
+    return task.done != ' '
 
 
 def test():
@@ -859,14 +867,32 @@ def test():
     sort_field = 'date'
     tasks = sort_task(meta, sort_field)
 
+    print "=" * 70
     groups = group_task(tasks, sort_field, ranges)
-
-
-
     for grp in groups:
         print "-" * 70
         for task in grp:
             print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+
+    print "=" * 70
+    pending_task = filter_tasks(tasks, 'done', pending)
+    groups = group_task(pending_task, sort_field, ranges)
+    for grp in groups:
+        print "-" * 70
+        for task in grp:
+            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+
+
+    print "=" * 70
+    done_task = filter_tasks(tasks, 'done', done)
+    groups = group_task(done_task, sort_field, ranges)
+    for grp in groups:
+        print "-" * 70
+        for task in grp:
+            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+
+
+
 
     foo = 1
 
