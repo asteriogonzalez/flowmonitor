@@ -49,7 +49,13 @@ Not finished yet. The idea is to launch `py.test` when there is some time since 
 
 ### Command line Example:
 
+The command line syntax is:
+
+`$ flowmonitor.py [plugin1] [folder1] [plugin2] [folder2] [plugin3] [folder3] ... `
+
+As an example:
+
 `$ flowmonitor.py pelican . pytest . pelican ~/Documents/blog`
 
 
-Will monitorize . with a pelican handler and pytest handler and ~/Documents/blog with another pelican handler as well.
+will monitorize folder `.` with a `pelican` and `pytest` handlers and `~/Documents/blog` with another `pelican` handler as well.
