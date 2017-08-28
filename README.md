@@ -60,6 +60,8 @@ As an example:
 
 will monitorize folder `.` with a `pelican` and `pytest` handlers and `~/Documents/blog` with another `pelican` handler as well.
 
+This also creates a config file `flow.yaml` that will be used next time if user doesn't specify any arguments.
+
 ## Dependences
 
 `sudo pip install watchdog`
