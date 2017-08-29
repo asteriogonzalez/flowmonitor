@@ -73,7 +73,8 @@ def event_key(event):
 
 
 class Task(object):
-    def __init__(self, done, text, fields, filename):
+    def __init__(self, priority, done, text, fields, filename):
+        self.priority = priority
         self.done = done
         self.text = text
         self.fields = fields
@@ -888,7 +889,7 @@ def collect_info(filename):
     field = dict()
     tasks = list()
 
-    re_task = re.compile(r'-\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
+    re_task = re.compile(r'(?P<priority>-|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
 
     f = codecs.open(filename, 'r', 'utf-8')
     for line in f.readlines():
@@ -930,8 +931,8 @@ def get_tags(meta):
 def task_iterator(meta):
     for filename, info in meta.items():
         fields, tasks = info
-        for done, text in tasks:
-            yield Task(done, text, fields, filename)
+        for priority, done, text in tasks:
+            yield Task(priority, done, text, fields, filename)
 
 
 class TaskGroups(OrderedDict):
