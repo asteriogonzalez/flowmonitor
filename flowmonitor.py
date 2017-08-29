@@ -40,6 +40,9 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemMovedEvent, \
      FileSystemEventHandler, LoggingEventHandler
 
+from jinja2 import Environment, PackageLoader, select_autoescape
+
+
 # from cjson import encode, decode
 
 # from queuelib import FifoDiskQueue, PriorityQueue
@@ -537,7 +540,9 @@ class PelicanHandler(EventHandler):
                              re.MULTILINE | re.DOTALL | re.IGNORECASE)
     _re_templates = re.compile(r'.*template|templates.*', re.I | re.DOTALL)
 
-    def __init__(self, path, extensions='.md'):
+    def __init__(self, path):
+        # TODO: better parsing arguments from command line
+        extensions='.md'
         EventHandler.__init__(self, path, extensions)
 
     def on_created(self, event):
@@ -669,10 +674,16 @@ class SyncHandler(EventHandler):
     that any file matching any of them, will be synchronized.
     """
 
-    def __init__(self, path, extensions='.md', remotes='/tmp/remote',
-                 rules=r'Tags:\s*.*\W+(foo)\W+.*', location='ai',
-                 delete_missing=False):
-        EventHandler.__init__(self, path, extensions)
+    def __init__(self, path):
+        # TODO: better parsing arguments from command line
+        extensions='.md'
+        remotes='/tmp/remote'
+        rules=r'Tags:\s*.*\W+(foo)\W+.*'
+        location='ai'
+        delete_missing=False
+
+        # EventHandler.__init__(self, path, extensions)
+        EventHandler.__init__(self, path)
         self.rules = split_liststr(rules)
         self.remotes = split_liststr(remotes)
         self.location = split_liststr(location)
@@ -772,13 +783,74 @@ class PyTestHandler(EventHandler):
 
     def match(self, event):
         "Determine if we can handle this event"
-        return event.path.endswith('.py')
+        return EventHandler(self, event) and event.path.endswith('.py')
+
+class DashboardHandler(EventHandler):
+    """A simple Handler that regenerate a Task Dashboard.
+    """
+    def __init__(self, path):
+        path = os.path.join(path, 'content')
+        extensions = '.md'
+        EventHandler.__init__(self, path, extensions)
+
+        self.env = Environment(
+            loader=PackageLoader('flowmonitor', '.'),
+            autoescape=select_autoescape(['html', 'xml'])
+        )
+        self.template = self.env.get_template('dashboard.md')
+        self.last_generation = 0
+
+    def on_idle(self):
+        "Performs syncing tasks"
+
+        print "Idle on Dashboard"
+        mtime = os.stat(self.path).st_mtime
+        if True or mtime > self.last_generation:  # TODO: detect when some file has changed
+            # p = Process(target=self.sync)
+            # p.start()
+            # p.join()
+            self.create_dashboard()  # for debugging
+            self.last_generation = mtime
+        else:
+            print "Nothing has change from last time ..."
+
+    def create_dashboard(self):
+        # Build all META info from MD files
+        meta = dict()
+        for filename in fileiter(self.path, '.*md'):
+            meta[filename] = metainfo(filename)
+
+        all_tags = get_tags(meta)
+
+        # Create a sorted LIST of ALL tasks
+        # sort_field = 'modified'
+        sort_field = 'date'
+        all_tasks = sort_task(meta, sort_field)
+
+        # prepare context for rendering
+        context = locals()
+        context['len'] = list.__len__
+        context['translate_done'] = translate_done
+
+        # render
+        output =  self.template.render(context)
+        # output = output.replace('\n\n', '\n')
+
+        # save to dashboard Markdown file
+        dashboard = os.path.join(self.path, 'dashboard.md')
+        dashboard = exppath(dashboard)
+        with codecs.open(dashboard, 'w', 'utf-8') as f:
+            f.write(output)
+
+
+
 
 
 # register this module Handlers
 register_handler(PelicanHandler)
 register_handler(SyncHandler)
 register_handler(PyTestHandler)
+register_handler(DashboardHandler)
 
 def fileiter(path, regexp):
     if isinstance(regexp, types.StringTypes):
@@ -796,6 +868,7 @@ def get_url(field):
         #url = url.replace(' ', '%20')
         url = quote(url)
     else:
+        # url = field.get('title', '')
         url = field['title']
         url = url.lower().replace(' ', '-')
     lang = field.get('lang')
@@ -978,100 +1051,10 @@ def translate_done(status):
     keys = {' ': 'Next', None: 'Done',}
     return keys.get(status, '??')
 
-def test():
-    # Build all META info from MD files
-    meta = dict()
-    for filename in fileiter('~/Documents/tpom/content', '.*md'):
-        meta[filename] = metainfo(filename)
-
-    all_tags = get_tags(meta)
-
-    # Create a sorted LIST of ALL tasks
-    # sort_field = 'modified'
-    sort_field = 'date'
-    all_tasks = sort_task(meta, sort_field)
-
-    print "=" * 70
-    groups = all_tasks.group_by('tags', all_tags)
-    print_groups(groups)
-
-
-    for grp, done_tasks in all_tasks.group_by('done', [' '], once=True, exact=True, skip_empty=False).items():
-        print "Group:", grp
-        print "=" * 40
-
-        for tag, tasks in done_tasks.group_by('tags', all_tags).items():
-            print "Tag:", tag
-            print "-" * 40
-            for task in tasks:
-                print "- [%s]: %s" % (task.done, task.text)
-
-
-
-    for tag, tasks in all_tasks.group_by('tags', all_tags).items():
-        print "Tag:", tag
-        print "=" * 40
-        for grp, done_tasks in tasks.group_by('done', [' '],
-            once=True, exact=True, skip_empty=False).items():
-            print "Group:", grp
-            print "-" * 40
-            for task in done_tasks:
-                print "- [%s]: %s" % (task.done, task.text)
-
-
-
-    print "=" * 70
-    ranges = ['2017-07-01 00:00', '2017-08-01 00:00', '2017-08-20 00:00']
-    groups = all_tasks.group_by(sort_field, ranges, once=True, notmaching=True, skip_empty=False)
-    print_groups(groups)
-
-
-    print "=" * 70
-    pending_task = all_tasks.group_by('done', [' '], once=True, exact=True, skip_empty=False)
-    print_groups(pending_task)
-
-    print "=" * 70
-    done_task = all_tasks.group_by('done', ['x'], once=True, exact=True, skip_empty=False)
-    print_groups(done_task)
-
-    # prepare Jinja template
-    from jinja2 import Environment, PackageLoader, select_autoescape
-    env = Environment(
-        loader=PackageLoader('flowmonitor', '.'),
-        autoescape=select_autoescape(['html', 'xml'])
-    )
-    template = env.get_template('template.md')
-
-    # prepare context for rendering
-    context = locals()
-    context['len'] = list.__len__
-    context['translate_done'] = translate_done
-
-    # render
-    output =  template.render(context)
-    # output = output.replace('\n\n', '\n')
-
-    # save to dashboard Markdown file
-    dashboard = '~/Documents/tpom/content/dashboard.md'
-    dashboard = exppath(dashboard)
-    with codecs.open(dashboard, 'w', 'utf-8') as f:
-        f.write(output)
-
-
-
-    foo = 1
-
-
-
-
 
 
 
 if __name__ == "__main__":
-
-    test()
-    sys.exit()
-
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
