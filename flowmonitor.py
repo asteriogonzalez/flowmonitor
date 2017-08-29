@@ -16,7 +16,7 @@ TODO:
 
 """
 import codecs
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 import datetime
 from getpass import getuser
 import hashlib
@@ -27,12 +27,13 @@ import os
 from pprint import pprint
 import random
 import re
+import sqlite3
 import sys
+import subprocess
 import threading
 import time
 import types
-import sqlite3
-import subprocess
+from urllib import quote
 import yaml
 
 from watchdog.observers import Observer
@@ -68,7 +69,16 @@ def event_key(event):
     return event.path, event.folder
 
 
-Task = namedtuple('Task', ('done', 'text', 'fields', 'tags', 'filename'))
+Task = namedtuple('Task', ('done', 'text', 'tags', 'fields', 'filename'))
+class Task(object):
+    def __init__(self, done, text, fields, filename):
+        self.done = done
+        self.text = text
+        self.fields = fields
+        self.filename = filename
+
+    def __getattr__(self, key):
+        return self.fields[key]
 
 
 re_split = re.compile(r'\W*(\w+)\W*(.*)$')
@@ -780,6 +790,21 @@ def fileiter(path, regexp):
             if regexp.match(filename):
                 yield filename
 
+def get_url(field):
+    url = field.get('slug')
+    if url:
+        #url = url.replace(' ', '%20')
+        url = quote(url)
+    else:
+        url = field['title']
+        url = url.lower().replace(' ', '-')
+    lang = field.get('lang')
+    if lang and lang != 'en':
+        url += '-' + lang
+    url += '.html'
+    return url
+
+
 def collect_info(filename):
     field = dict()
     tasks = list()
@@ -800,23 +825,80 @@ def collect_info(filename):
             # done, text = m.groups()
             # tasks.append((done.strip().lower(), text))
 
+    field['url'] = get_url(field)
     return field, tasks
 
 def metainfo(filename):
-    field, tasks = collect_info(filename)
-    tags = [t.strip() for t in field.get('tags', '').lower().split(',')]
-    return field, tags, tasks
+    fields, tasks = collect_info(filename)
+    tags = [t.strip() for t in fields.get('tags', '').lower().split(',')]
+    tags = [t for t in tags if t]  # remove blank tags
+    tags.sort()
+    fields['tags'] = tags
+    return fields, tasks
+
+def get_tags(meta):
+    all_tags = set()
+    for filename, info in meta.items():
+        fields, tasks = info
+        all_tags.update(fields['tags'])
+    all_tags = list(all_tags)
+    all_tags.sort()
+    return all_tags
+
 
 def task_iterator(meta):
     for filename, info in meta.items():
-        fields, tags, tasks = info
+        fields, tasks = info
         for done, text in tasks:
-            yield Task(done, text, fields, tags, filename)
+            yield Task(done, text, fields, filename)
+
+
+class TaskGroups(OrderedDict):
+    pass
+
+class GroupableTasks(list):
+    def group_by(self, field, categories, once=False, exact=False, notmaching=False, skip_empty=True):
+        groups = TaskGroups()
+        used = set()
+        for cat in categories:
+            grp = GroupableTasks()
+            for i, task in enumerate(self):
+                if once and i in used:
+                    continue
+                match = False
+                value = getattr(task, field)
+                if isinstance(value, types.ListType):
+                    if cat in value:
+                        match = True
+                elif exact:
+                    if value == cat:
+                        match = True
+                else:
+                    if value <= cat:
+                        match = True
+
+                if match:
+                    grp.append(task)
+                    used.add(i)
+
+            if len(grp) >0 or not skip_empty:
+                groups[cat] = grp
+
+        if notmaching:
+            notused = GroupableTasks()
+            for i, task in enumerate(self):
+                if i not in used:
+                    notused.append(self[i])
+            groups[None] = notused
+
+        return groups
 
 
 def sort_task(meta, field):
     field = field.lower()
     tasks = [t for t in task_iterator(meta)]
+    tasks =  GroupableTasks(tasks)
+
     def sort(a, b):
         va = a.fields.get(field)
         vb = b.fields.get(field)
@@ -830,16 +912,47 @@ def sort_task(meta, field):
     return tasks
 
 def group_task(tasks, field, ranges):
+    "Group tasks by field and ranges, and task can appears in every matching groups"
+
+    # split into groups
+    groups = dict()
+    tasks = list(tasks)
+    for r in ranges:
+        grp = list()
+        for task in tasks:
+            value = task.fields[field]
+            if isinstance(value, types.ListType):
+                if r in value:
+                    grp.append(task)
+            elif value <= r:
+                grp.append(task)
+
+        groups[r] = grp
+
+    return groups
+
+def group_task_excluded(tasks, field, ranges):
+    "Group tasks by field and ranges, but task only appears in the 1st mathing group"
     # split into groups
     groups = list()
     tasks = list(tasks)
     for r in ranges:
         grp = list()
-        while tasks:
-            if tasks[0].fields[field] < r:
-                grp.append(tasks.pop(0))
+        i = 0
+        while i < len(tasks):
+            move = False
+            value = tasks[i].fields[field]
+            if isinstance(value, types.ListType):
+                if r in value:
+                    move = True
+            elif value <= r:
+                move = True
+
+            if move:
+                grp.append(tasks.pop(i))
             else:
-                break
+                i += 1
+
         groups.append(grp)
 
     groups.append(tasks)
@@ -855,61 +968,71 @@ def pending(task):
 def done(task):
     return task.done != ' '
 
+def print_groups(groups):
+    for tag, grp in groups.items():
+        print "-", tag, "-" * 70
+        for task in grp:
+            print '- [%s]: %s %s' % (task.done, task.text, task.tags)
+
+def translate_done(status):
+    keys = {' ': 'Next', None: 'Done',}
+    return keys.get(status, '??')
 
 def test():
+    # Build all META info from MD files
     meta = dict()
     for filename in fileiter('~/Documents/tpom/content', '.*md'):
         meta[filename] = metainfo(filename)
 
-    # tasks = sort_task(meta, 'Modified')
-    ranges = ['2017-07-01 00:00', '2017-08-01 00:00', '2017-08-20 00:00']
+    all_tags = get_tags(meta)
 
+    # Create a sorted LIST of ALL tasks
+    # sort_field = 'modified'
     sort_field = 'date'
-    tasks = sort_task(meta, sort_field)
+    all_tasks = sort_task(meta, sort_field)
 
     print "=" * 70
-    groups = group_task(tasks, sort_field, ranges)
-    for grp in groups:
-        print "-" * 70
-        for task in grp:
-            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+    groups = all_tasks.group_by('tags', all_tags)
+    print_groups(groups)
+
+
+    for grp, done_tasks in all_tasks.group_by('done', [' '], once=True, exact=True, skip_empty=False).items():
+        print "Group:", grp
+        print "=" * 40
+
+        for tag, tasks in done_tasks.group_by('tags', all_tags).items():
+            print "Tag:", tag
+            print "-" * 40
+            for task in tasks:
+                print "- [%s]: %s" % (task.done, task.text)
+
+
+
+    for tag, tasks in all_tasks.group_by('tags', all_tags).items():
+        print "Tag:", tag
+        print "=" * 40
+        for grp, done_tasks in tasks.group_by('done', [' '],
+            once=True, exact=True, skip_empty=False).items():
+            print "Group:", grp
+            print "-" * 40
+            for task in done_tasks:
+                print "- [%s]: %s" % (task.done, task.text)
+
+
 
     print "=" * 70
-    pending_task = filter_tasks(tasks, 'done', pending)
-    groups = group_task(pending_task, sort_field, ranges)
-    for grp in groups:
-        print "-" * 70
-        for task in grp:
-            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+    ranges = ['2017-07-01 00:00', '2017-08-01 00:00', '2017-08-20 00:00']
+    groups = all_tasks.group_by(sort_field, ranges, once=True, notmaching=True, skip_empty=False)
+    print_groups(groups)
 
 
     print "=" * 70
-    done_task = filter_tasks(tasks, 'done', done)
-    groups = group_task(done_task, sort_field, ranges)
-    for grp in groups:
-        print "-" * 70
-        for task in grp:
-            print '- [%(done)s]: %(text)s %(tags)s' % (task._asdict())
+    pending_task = all_tasks.group_by('done', [' '], once=True, exact=True, skip_empty=False)
+    print_groups(pending_task)
 
-
-    pending_group = dict()
-    for task in pending_task:
-        tags = task.tags
-        tags.sort()
-        tags = ' '.join(tags)
-        grp = pending_group.setdefault(tags, list())
-        grp.append(task)
-
-
-    done_group = dict()
-    for task in done_task:
-        tags = task.tags
-        tags.sort()
-        tags = ' '.join(tags)
-        grp = done_group.setdefault(tags, list())
-        grp.append(task)
-
-
+    print "=" * 70
+    done_task = all_tasks.group_by('done', ['x'], once=True, exact=True, skip_empty=False)
+    print_groups(done_task)
 
     # prepare Jinja template
     from jinja2 import Environment, PackageLoader, select_autoescape
@@ -922,9 +1045,10 @@ def test():
     # prepare context for rendering
     context = locals()
     context['len'] = list.__len__
+    context['translate_done'] = translate_done
 
     # render
-    output =  template.render(locals())
+    output =  template.render(context)
     # output = output.replace('\n\n', '\n')
 
     # save to dashboard Markdown file
@@ -944,6 +1068,7 @@ def test():
 
 
 if __name__ == "__main__":
+
     test()
     sys.exit()
 

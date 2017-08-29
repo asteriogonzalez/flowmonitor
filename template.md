@@ -9,51 +9,26 @@ Lang: en
 Series: Focus
 
 
-Pending Tasks group by Tags
+
+{% for status, done_tasks in all_tasks.group_by('done', [' '],
+    once=True, exact=True, notmaching=True, skip_empty=False).items() -%}
+
+{{translate_done(status)}} Tasks
 ==================================
 
-{% for tags, grp in pending_group.items() %}
-{{tags}}
----------------
-{% for task in grp %}
-- [{{task.done}}]: {{task.text -}}
+{% for tag, tasks in done_tasks.group_by('tags', all_tags, once=True).items() %}
+
+{{tag}}
+---------------------
+({{len(tasks)}} tasks)
+
+{% for task in tasks -%}
+- [{{task.done -}}]: [{{task.text -}}]({{task.url -}})
 {% endfor %}
-
 {% endfor %}
-
-
-Done Tasks group by Tags
-==================================
-
-{% for tags, grp in done_group.items() %}
-{{tags}}
----------------
-{% for task in grp %}
-- [{{task.done}}]: {{task.text -}}
-{% endfor %}
-
-{% endfor %}
-
 
 ----
-
-All Pending Tasks
-=================
-
-{{ len(pending_task) }} Tasks
-
-{% for task in pending_task %}
-- [{{task.done}}]: {{task.text -}}
 {% endfor %}
 
-
-All Done Tasks
-=================
-
-{{ len(done_task) }} Tasks
-
-{% for task in done_task %}
-- [{{task.done}}]: {{task.text}} {{task.tags -}}
-{% endfor %}
 
 
