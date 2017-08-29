@@ -72,7 +72,6 @@ def event_key(event):
     return event.path, event.folder
 
 
-Task = namedtuple('Task', ('done', 'text', 'tags', 'fields', 'filename'))
 class Task(object):
     def __init__(self, done, text, fields, filename):
         self.done = done
@@ -84,13 +83,15 @@ class Task(object):
         return self.fields[key]
 
 
-re_split = re.compile(r'\W*(\w+)\W*(.*)$')
-
 def exppath(path):
     path = os.path.expanduser(path)
     path = os.path.expandvars(path)
     path = os.path.abspath(path)
     return path
+
+
+re_split = re.compile(r'\W*(\w+)\W*(.*)$')
+
 
 def split_string(line):
     "Split a string into tokens"
@@ -137,6 +138,7 @@ def are_equals(source, target):
         m_target.update(f.read())
 
     return m_source.digest() == m_target.digest()
+
 
 primitives = (int, str, bool, unicode, list, dict, float)
 
@@ -542,7 +544,7 @@ class PelicanHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        extensions='.md'
+        extensions = '.md'
         EventHandler.__init__(self, path, extensions)
 
     def on_created(self, event):
@@ -586,6 +588,7 @@ class PelicanHandler(EventHandler):
             replace[r'\$random\$'] = (random.randint, 0, 1000)
             replace[r'\$date\$'] = headers['Modified']
             replace[r'\$user\$'] = getuser()
+            replace[r'\$author\$'] = getuser()
             self.update_replacements(lines, replace)
 
         self.write_file(event, lines)
@@ -676,11 +679,11 @@ class SyncHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        extensions='.md'
-        remotes='/tmp/remote'
-        rules=r'Tags:\s*.*\W+(foo)\W+.*'
-        location='ai'
-        delete_missing=False
+        extensions = '.md'
+        remotes = '/tmp/remote'
+        rules = r'Tags:\s*.*\W+(foo)\W+.*'
+        location = 'ai'
+        delete_missing = False
 
         # EventHandler.__init__(self, path, extensions)
         EventHandler.__init__(self, path)
@@ -785,6 +788,7 @@ class PyTestHandler(EventHandler):
         "Determine if we can handle this event"
         return EventHandler(self, event) and event.path.endswith('.py')
 
+
 class DashboardHandler(EventHandler):
     """A simple Handler that regenerate a Task Dashboard.
     """
@@ -794,25 +798,35 @@ class DashboardHandler(EventHandler):
         EventHandler.__init__(self, path, extensions)
 
         self.env = Environment(
-            loader=PackageLoader('flowmonitor', '.'),
+            loader=PackageLoader('flowmonitor', 'templates'),
             autoescape=select_autoescape(['html', 'xml'])
         )
-        self.template = self.env.get_template('dashboard.md')
+        self.template = self.env.get_template('dashboard.tpl.md')
         self.last_generation = 0
+
+        self.dashborad_file = os.path.join(self.path, 'dashboard.md')
 
     def on_idle(self):
         "Performs syncing tasks"
 
         print "Idle on Dashboard"
-        mtime = os.stat(self.path).st_mtime
-        if True or mtime > self.last_generation:  # TODO: detect when some file has changed
+        if self.must_update():
             # p = Process(target=self.sync)
             # p.start()
             # p.join()
             self.create_dashboard()  # for debugging
-            self.last_generation = mtime
         else:
             print "Nothing has change from last time ..."
+
+    def must_update(self):
+        for filename in fileiter(self.path, '.*\.md$'):
+            if filename == self.dashborad_file:
+                continue
+
+            mtime = os.stat(filename).st_mtime
+            if mtime > self.last_generation:
+                self.last_generation = time.time()
+                return True
 
     def create_dashboard(self):
         # Build all META info from MD files
@@ -833,7 +847,7 @@ class DashboardHandler(EventHandler):
         context['translate_done'] = translate_done
 
         # render
-        output =  self.template.render(context)
+        output = self.template.render(context)
         # output = output.replace('\n\n', '\n')
 
         # save to dashboard Markdown file
@@ -842,15 +856,6 @@ class DashboardHandler(EventHandler):
         with codecs.open(dashboard, 'w', 'utf-8') as f:
             f.write(output)
 
-
-
-
-
-# register this module Handlers
-register_handler(PelicanHandler)
-register_handler(SyncHandler)
-register_handler(PyTestHandler)
-register_handler(DashboardHandler)
 
 def fileiter(path, regexp):
     if isinstance(regexp, types.StringTypes):
@@ -862,10 +867,11 @@ def fileiter(path, regexp):
             if regexp.match(filename):
                 yield filename
 
+
 def get_url(field):
     url = field.get('slug')
     if url:
-        #url = url.replace(' ', '%20')
+        # url = url.replace(' ', '%20')
         url = quote(url)
     else:
         # url = field.get('title', '')
@@ -901,6 +907,7 @@ def collect_info(filename):
     field['url'] = get_url(field)
     return field, tasks
 
+
 def metainfo(filename):
     fields, tasks = collect_info(filename)
     tags = [t.strip() for t in fields.get('tags', '').lower().split(',')]
@@ -908,6 +915,7 @@ def metainfo(filename):
     tags.sort()
     fields['tags'] = tags
     return fields, tasks
+
 
 def get_tags(meta):
     all_tags = set()
@@ -929,8 +937,10 @@ def task_iterator(meta):
 class TaskGroups(OrderedDict):
     pass
 
+
 class GroupableTasks(list):
-    def group_by(self, field, categories, once=False, exact=False, notmaching=False, skip_empty=True):
+    def group_by(self, field, categories, once=False, exact=False,
+                 notmaching=False, skip_empty=True):
         groups = TaskGroups()
         used = set()
         for cat in categories:
@@ -954,7 +964,7 @@ class GroupableTasks(list):
                     grp.append(task)
                     used.add(i)
 
-            if len(grp) >0 or not skip_empty:
+            if len(grp) > 0 or not skip_empty:
                 groups[cat] = grp
 
         if notmaching:
@@ -970,7 +980,7 @@ class GroupableTasks(list):
 def sort_task(meta, field):
     field = field.lower()
     tasks = [t for t in task_iterator(meta)]
-    tasks =  GroupableTasks(tasks)
+    tasks = GroupableTasks(tasks)
 
     def sort(a, b):
         va = a.fields.get(field)
@@ -984,8 +994,10 @@ def sort_task(meta, field):
     tasks.sort(sort)
     return tasks
 
+
 def group_task(tasks, field, ranges):
-    "Group tasks by field and ranges, and task can appears in every matching groups"
+    """Group tasks by field and ranges, and task can appears
+    in every matching groups"""
 
     # split into groups
     groups = dict()
@@ -1004,42 +1016,6 @@ def group_task(tasks, field, ranges):
 
     return groups
 
-def group_task_excluded(tasks, field, ranges):
-    "Group tasks by field and ranges, but task only appears in the 1st mathing group"
-    # split into groups
-    groups = list()
-    tasks = list(tasks)
-    for r in ranges:
-        grp = list()
-        i = 0
-        while i < len(tasks):
-            move = False
-            value = tasks[i].fields[field]
-            if isinstance(value, types.ListType):
-                if r in value:
-                    move = True
-            elif value <= r:
-                move = True
-
-            if move:
-                grp.append(tasks.pop(i))
-            else:
-                i += 1
-
-        groups.append(grp)
-
-    groups.append(tasks)
-    return groups
-
-def filter_tasks(tasks, field, criteria):
-    result = [t for t in tasks if criteria(t)]
-    return result
-
-def pending(task):
-    return task.done == ' '
-
-def done(task):
-    return task.done != ' '
 
 def print_groups(groups):
     for tag, grp in groups.items():
@@ -1051,8 +1027,11 @@ def translate_done(status):
     keys = {' ': 'Next', None: 'Done',}
     return keys.get(status, '??')
 
-
-
+# register this module Handlers
+register_handler(PelicanHandler)
+register_handler(SyncHandler)
+register_handler(PyTestHandler)
+register_handler(DashboardHandler)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,

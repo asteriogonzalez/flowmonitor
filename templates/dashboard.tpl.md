@@ -1,9 +1,9 @@
 Title: A Dashboard
 Subtitle: Overview here!
-Date: 2017-08-29 15:50
-Modified: 2017-08-29 20:40
+Date: $date$
+Modified: $date$
 Tags: kpi
-Authors: agp
+Authors: $author$
 Summary: KPI Dashboard
 Lang: en
 Series: Focus
