@@ -332,7 +332,7 @@ class Flow(Persistent):
         self.monitor = EventMonitor(self)
         self.handlers = list()
         self.eventpolling = 0.2
-        self.idlecycles = 50
+        self.idlecycles = 200
         self.configfile = ''
 
     def run(self):
@@ -353,10 +353,10 @@ class Flow(Persistent):
 
         try:
             while True:
+                self.idle()
                 for counter in xrange(self.idlecycles):
                     time.sleep(self.eventpolling)  # non-locker style
                     self.next()
-                self.idle()
 
         except KeyboardInterrupt:
             loginfo('User Keyboard interrupt')
@@ -397,12 +397,12 @@ class Flow(Persistent):
 
     def idle(self):
         "Performs tasks that suit in idle loops from time to time"
-        now = time.time()
-        event = self.queue.get_last_event(now - 10)
-        if event:
-            print "Do something idle ..."
-            for handler in self.handlers:
-                handler.on_idle()
+        # now = time.time()
+        # event = self.queue.get_last_event(now - 10)
+        # if event:
+        print "Do something idle ..."
+        for handler in self.handlers:
+            handler.on_idle()
 
     def save_config(self, configfile=None):
         """Save internal config to a file"""
@@ -1055,6 +1055,7 @@ class BackupHandler(EventHandler):
         EventHandler.__init__(self, path, extensions)
 
         self.temp = '/tmp'
+        self.remote_folder = '/backup/'
         self.last_backup = time.time()
         self.last_update = self.last_backup
         self.last_working = 0
@@ -1096,7 +1097,7 @@ class BackupHandler(EventHandler):
         zipfile = bak.compress_git(self.path)
         if zipfile:
             bak.start_daemon()
-            bak.upload(zipfile, '/test/', rotate=True, remove_after=True)
+            bak.upload(zipfile, self.remote_folder, rotate=True, remove_after=True)
             bak.stop_daemon()
 
             self.last_backup = time.time()

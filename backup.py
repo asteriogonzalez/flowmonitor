@@ -132,6 +132,9 @@ class MegaBackup(object):
         cmd = ['mega-exec']
         cmd.extend(args)
         kw.setdefault('timeout', 600)
+
+        print "-" * 70
+        print "EXEC: %s" % ' '.join(cmd)
         try:
             # output = subprocess.check_output(cmd, **kw)
             # output, returncode = Runner(cmd, **kw).go()
@@ -142,6 +145,9 @@ class MegaBackup(object):
             print('Waiting 5 secs before continue ...')
             time.sleep(5)
             raise why
+
+        print "OUT: %s" % output
+        print "RET: [%s]" % returncode
 
         return output, returncode
 
@@ -167,13 +173,13 @@ class MegaBackup(object):
                 destination,
                 os.path.basename(localfile))
 
+        result = self.replace(localfile, destination)
         if rotate:
             names = rotatenames(destination)
-            result = self.replace(localfile, names[0])
             for target in names[1:]:
-                self.execute('cp', names[0], target)
-        else:
-            result = self.replace(localfile, destination)
+                self.execute('cp', destination, target)
+
+            self.execute('mv', destination, names[0])
 
         if remove_after:
             os.unlink(localfile)
@@ -182,7 +188,7 @@ class MegaBackup(object):
 
     def replace(self, path, where, quick=True):
         "Replace a file safely in remote server"
-        print(">> %s" % where)
+        print(">> REPLACE: %s -> %s" % (path, where))
         if os.path.exists(path):
             remove = False
             if quick:
@@ -207,7 +213,10 @@ class MegaBackup(object):
                     pass
 
             try:
-                result = self.execute('put', '-c', path, where)
+                result = self.execute('put', '-c',
+                                      path,
+                                      os.path.dirname(where)
+                                      )
                 time.sleep(1)  # nice with mega
             except subprocess.CalledProcessError:
                 pass
