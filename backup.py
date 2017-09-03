@@ -59,7 +59,7 @@ def run(cmd, **kw):
 class MegaBackup(object):
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
 
-    def __init__(self, credentials):
+    def __init__(self, credentials=None):  # TODO: user credentials
         self.credentials = credentials
         self.daemon = None
 
@@ -172,9 +172,15 @@ class MegaBackup(object):
         return stdout, returncode
 
     def compress_git(self, path):
-        git_path = os.path.join(path, '.git')
-        if os.path.exists(git_path):
+        if path.endswith('.git'):
+            git_path = path
+            parent = os.path.join(*os.path.split(path)[:-1])
+            basename = os.path.basename(parent) + '.git.7z'
+        else:
+            git_path = os.path.join(path, '.git')
             basename = os.path.basename(path) + '.git.7z'
+
+        if os.path.exists(git_path):
             zipfile = os.path.join('/tmp/', basename)
             self.compress(git_path, zipfile)
             return zipfile

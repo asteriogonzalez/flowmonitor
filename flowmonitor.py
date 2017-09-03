@@ -1078,19 +1078,21 @@ class BackupHandler(EventHandler):
 
         # make a backup 30 min later than user has modified any file
         delay = 1800
-        return self.last_working - delay > self.last_backup
+        return time.time() - self.last_working > delay
 
     def create_backup(self):
         print("Creating a new Backup for %s" % self.path)
 
-        backup = backup.MegaBackup(('asterio.gonzalez@gmail.com'))
-        zipfile = backup.compress_git(self.path)
+        bak = backup.MegaBackup()
+        zipfile = bak.compress_git(self.path)
+        if zipfile:
+            bak.start_daemon()
+            bak.upload(zipfile, '/test/', rotate=True, remove_after=True)
+            bak.stop_daemon()
 
-        backup.start_daemon()
-        backup.upload(zipfile, '/test/', rotate=True, remove_after=True)
-        backup.stop_daemon()
-
-        self.last_backup = self.last_update
+            self.last_backup = time.time()
+        else:
+            print("Error making backup file")
 
 def key1(x): return 1
 
