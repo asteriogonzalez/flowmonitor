@@ -1037,6 +1037,7 @@ def translate_done(status):
     return keys.get(status, '??')
 
 
+import backup
 class BackupHandler(EventHandler):
     """A simple Handler that create backups of .git repositories and upload to MEGA.
     """
@@ -1048,6 +1049,7 @@ class BackupHandler(EventHandler):
         self.temp = '/tmp'
         self.last_backup = time.time()
         self.last_update = self.last_backup
+        self.last_working = 0
 
     def on_idle(self):
         "Performs syncing tasks"
@@ -1062,11 +1064,32 @@ class BackupHandler(EventHandler):
             print("Nothing has change from last time ...")
 
     def must_update(self):
+        """Check that there are new commits in git and
+        the user seems to have stopped to modify working files
+        before making a backup.
+        """
         self.last_update = max(get_modified(self.path, since=0), key=key1)[1]
-        return self.last_update > self.last_backup
+
+        if self.last_update <= self.last_backup:
+            return False
+
+        parent = os.path.join(*os.path.split(self.path)[:-1])
+        self.last_working = max(get_modified(parent, since=0), key=key1)[1]
+
+        # make a backup 30 min later than user has modified any file
+        delay = 1800
+        return self.last_working - delay > self.last_backup
 
     def create_backup(self):
         print("Creating a new Backup for %s" % self.path)
+
+        backup = backup.MegaBackup(('asterio.gonzalez@gmail.com'))
+        zipfile = backup.compress_git(self.path)
+
+        backup.start_daemon()
+        backup.upload(zipfile, '/test/', rotate=True, remove_after=True)
+        backup.stop_daemon()
+
         self.last_backup = self.last_update
 
 def key1(x): return 1

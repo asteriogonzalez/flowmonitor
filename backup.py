@@ -1,4 +1,4 @@
-from __future__ import print_function
+#from __future__ import print_function
 import datetime
 import subprocess
 import os
@@ -6,8 +6,7 @@ import re
 import time
 import threading
 
-from flowmonitor import get_modified, EventHandler
-
+from flowmonitor import get_modified
 # TODO: return list of files not copied
 
 ERR_TIMEOUT = -1000
