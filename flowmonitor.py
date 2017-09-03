@@ -22,9 +22,9 @@ from getpass import getuser
 import hashlib
 import logging
 from logging import info as loginfo, warning as logwarning
-from multiprocessing import Process
+# from multiprocessing import Process
 import os
-from pprint import pprint
+# from pprint import pprint
 import random
 import re
 import sqlite3
@@ -38,9 +38,11 @@ import yaml
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemMovedEvent, \
-     FileSystemEventHandler, LoggingEventHandler
+     FileSystemEventHandler  # , LoggingEventHandler
 
 from jinja2 import Environment, PackageLoader, select_autoescape
+
+import backup
 
 
 # from cjson import encode, decode
@@ -249,7 +251,6 @@ class DBQueue(object):
         countdown is reached.
         """
         cursor = self.conn.cursor()
-        now = time.time()
         cursor.execute("""
                 UPDATE events SET date = ?, countdown = ?
                 WHERE path = ? AND event = ? AND folder = ?
@@ -877,6 +878,7 @@ def get_modified(path, since, regexp=None):
         if mdate > since:
             yield name, mdate
 
+
 def get_url(field):
     url = field.get('slug')
     if url:
@@ -897,7 +899,8 @@ def collect_info(filename):
     field = dict()
     tasks = list()
 
-    re_task = re.compile(r'(?P<priority>-|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
+    re_task = re.compile(
+        r'(?P<priority>-|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
 
     f = codecs.open(filename, 'r', 'utf-8')
     for line in f.readlines():
@@ -987,11 +990,13 @@ class GroupableTasks(list):
 
 
 def sort_task(meta, field):
+    "Sort tasks by field"
     field = field.lower()
     tasks = [t for t in task_iterator(meta)]
     tasks = GroupableTasks(tasks)
 
     def sort(a, b):
+        "Sort tasks by field"
         va = a.fields.get(field)
         vb = b.fields.get(field)
         if va is None:
@@ -1027,19 +1032,22 @@ def group_task(tasks, field, ranges):
 
 
 def print_groups(groups):
+    "Helper function for printing groups in console"
     for tag, grp in groups.items():
         print "-", tag, "-" * 70
         for task in grp:
             print '- [%s]: %s %s' % (task.done, task.text, task.tags)
 
+
 def translate_done(status):
-    keys = {' ': 'Next', None: 'Done',}
+    "Translate task 'done' attribute to a human readable way"
+    keys = {' ': 'Next', None: 'Done', }
     return keys.get(status, '??')
 
 
-import backup
 class BackupHandler(EventHandler):
-    """A simple Handler that create backups of .git repositories and upload to MEGA.
+    """A simple Handler that create backups of .git repositories
+    and upload to MEGA.
     """
     def __init__(self, path):
         path = os.path.join(path, '.git')
@@ -1081,6 +1089,7 @@ class BackupHandler(EventHandler):
         return time.time() - self.last_working > delay
 
     def create_backup(self):
+        "Create a New backup for the supervided path"
         print("Creating a new Backup for %s" % self.path)
 
         bak = backup.MegaBackup()
@@ -1094,7 +1103,9 @@ class BackupHandler(EventHandler):
         else:
             print("Error making backup file")
 
+
 def key1(x): return 1
+
 
 # register this module Handlers
 register_handler(PelicanHandler)

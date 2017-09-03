@@ -1,4 +1,33 @@
-#from __future__ import print_function
+# from __future__ import print_function
+"""
+This module provides Backup capabilities into your MEGA account
+of any folder, but is focused on tracking changes git repositories.
+
+Dependences
+============
+The MegaBackup class uses the mega-cmd packege that you can install
+from the application section in http://mega.nz
+
+7z command line program is used to create encrypted compressed files.
+
+Rotation Policy
+================
+Rotation policy is also supported:
+- 7-daily (mon-sun) :       e.g. flowmonitor.git.d6.7z
+- 1-per-week of the month:  e.g. flowmonitor.git.w0.7z
+- 1 per month:              e.g. flowmonitor.git.m9.7z
+- 1 per year:               e.g. flowmonitor.git.y17.7z
+
+So we need 7 + 5 + 12 = 24 files to cover a whole year.
+
+In each backup the dairy backup is generated and then is cloned
+modifying the rotation names, so the compressed file only is sent once
+and hence all files correspond with the last update.
+
+As soon a new day comes, some of the previous backups files will be left
+behind creating the rotation sequence.
+
+"""
 import datetime
 import subprocess
 import os
@@ -9,18 +38,19 @@ import threading
 from flowmonitor import get_modified
 # TODO: return list of files not copied
 
-ERR_TIMEOUT = -1000
 
 class Runner(object):
-    def __init__(self, cmd, timeout=120, **kw):
+    "A timeout runner that uses threading to control timeouts"
+    def __init__(self, cmd, timeout=120, **keywords):
         self.cmd = cmd
         self.timeout = timeout
-        self.kw = kw
+        self.keywords = keywords
         self.proc = None
         self.stdout = None
         self.stderr = None
 
     def go(self):
+        "Execute the command in a separate thread"
         thread = threading.Thread(target=self.target)
         thread.start()
         thread.join(self.timeout)
@@ -34,29 +64,32 @@ class Runner(object):
         return self.stdout, self.proc.returncode
 
     def target(self):
+        "This is the main function for the thread"
         # self.process = subprocess.Popen(self.cmd, shell=True)
         self.proc = subprocess.Popen(
             self.cmd, shell=False,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, **self.kw)
-
-        # print("> subprocess: %s created" % self.cmd)
+            stderr=subprocess.PIPE, **self.keywords)
 
         self.stdout, self.stderr = self.proc.communicate()
-        # print("< subprocess: %s finished [%s]" % (self.cmd, self.proc.returncode))
+
 
 def run(cmd, **kw):
+    "Run a command and returns stdout and return code"
     _ = kw.pop('timeout', None)  # not valid in 2.7
     proc = subprocess.Popen(
         cmd, shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, **kw)
 
-    stdout, stderr = proc.communicate()
+    stdout, _ = proc.communicate()
     return stdout, proc.returncode
 
 
 class MegaBackup(object):
+    """This class encapusulates the backup capabilities and
+    MEGA commands to upload and manage the remote files.
+    """
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
 
     def __init__(self, credentials=None):  # TODO: user credentials
@@ -71,9 +104,11 @@ class MegaBackup(object):
             raise RuntimeError("Unable to launch daemon login")
 
     def stop_daemon(self):
+        "Stop the mega-cmd daemon"
         self.daemon.terminate()
 
     def execute(self, *args, **kw):
+        "Execute a shell alike functions: cp, ls, put, etc"
         cmd = ['mega-exec']
         cmd.extend(args)
         kw.setdefault('timeout', 600)
@@ -91,7 +126,8 @@ class MegaBackup(object):
         return output, returncode
 
     def upload_folder(self, folder, destination, remove_after=False):
-
+        """Upload a entire folder into MEGA.
+        """
         dirname = os.path.dirname(folder)
         for root, _, files in os.walk(folder):
             for name in files:
@@ -104,9 +140,12 @@ class MegaBackup(object):
                     os.unlink(path)
 
     def upload(self, localfile, destination, rotate=False, remove_after=False):
+        """Upload a file into MEGA and create rotate file policy is needed"""
         ext = os.path.splitext(destination)
         if not ext[-1]:
-            destination = os.path.join(destination, os.path.basename(localfile))
+            destination = os.path.join(
+                destination,
+                os.path.basename(localfile))
 
         if rotate:
             names = rotatenames(destination)
@@ -130,34 +169,37 @@ class MegaBackup(object):
                 try:
                     output, returncode = self.execute('du', where)
                     if not returncode:
-                        m = self.regsize.match(output)
-                        if m:
-                            remote_size = int(m.group(1))
+                        match = self.regsize.match(output)
+                        if match:
+                            remote_size = int(match.group(1))
                             local_size = os.stat(path).st_size
                             if remote_size == local_size:
                                 return
                             remove = True
 
-                except subprocess.CalledProcessError, why:
+                except subprocess.CalledProcessError:
                     pass
             if not quick or remove:
                 try:
                     print("** REMOVING: %s **" % where)
                     self.execute('rm', where)
-                except subprocess.CalledProcessError, why:
+                except subprocess.CalledProcessError:
                     pass
 
             try:
                 result = self.execute('put', '-c', path, where)
                 time.sleep(1)  # nice with mega
-            except subprocess.CalledProcessError, why:
+            except subprocess.CalledProcessError:
                 pass
 
         return result
 
     def compress(self, path, zipfile):
+        """Compress a folder and check if someone has modified
+        the content meanwhile."""
         for attempt in range(5):
-            def key(x): return 1
+            def key(_):
+                return 1
             last_0 = max(get_modified(path, since=0), key=key)[1]
 
             cmd = ['7z', 'a', '-phello', '-mhe', zipfile, path]
@@ -166,12 +208,14 @@ class MegaBackup(object):
             last_1 = max(get_modified(path, since=0), key=key)[1]
             if last_0 == last_1:
                 break
-            print('contents are update while compressing folder, retry %s' % attempt)
+            print('contents are update while compressing folder, retry %s'
+                  % attempt)
             time.sleep(1)
 
         return stdout, returncode
 
     def compress_git(self, path):
+        "Compress the git repository of folder"
         if path.endswith('.git'):
             git_path = path
             parent = os.path.join(*os.path.split(path)[:-1])
@@ -185,7 +229,9 @@ class MegaBackup(object):
             self.compress(git_path, zipfile)
             return zipfile
 
+
 def rotatenames(path):
+    "Create a set of rotate names from a given path"
     name, ext = os.path.splitext(path)
     now = datetime.date.today()
     weekday = now.weekday()
@@ -199,32 +245,24 @@ def rotatenames(path):
             ''.join([name, '.y%s' % year, ext]))
 
 
-
-
-
-
 if __name__ == '__main__':
 
-    work = '/tmp/flowmonitor'
-    backup = MegaBackup(('asterio.gonzalez@gmail.com'))
+    # work = os.path.dirname(__file__)
+    # backup = MegaBackup()
 
-    zipfile = backup.compress_git(work)
+    # zipfile = backup.compress_git(work)
 
-    backup.start_daemon()
+    # backup.start_daemon()
 
-    backup.upload(zipfile, '/test/', rotate=True, remove_after=True)
+    # backup.upload(zipfile, '/test/', rotate=True, remove_after=True)
 
     # ls = backup.execute('ls')
     # print(ls)
     # filename = os.path.abspath(__file__)
     # r = backup.execute('put', filename, '/test/')
 
-    backup.upload_folder(work, '/test/')
+    # backup.upload_folder(work, '/test/')
 
-    backup.stop_daemon()
+    # backup.stop_daemon()
 
     print('-End-')
-
-
-
-
