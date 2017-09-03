@@ -111,8 +111,8 @@ class MegaBackup(object):
         if rotate:
             names = rotatenames(destination)
             result = self.replace(localfile, names[0])
-            self.execute('cp', names[0], names[1])
-            self.execute('cp', names[0], names[2])
+            for target in names[1:]:
+                self.execute('cp', names[0], target)
         else:
             result = self.replace(localfile, destination)
 
@@ -190,10 +190,12 @@ def rotatenames(path):
     now = datetime.date.today()
     weekday = now.weekday()
     week = now.day // 7
+    month = now.month
     year = str(now.year)[2:]
 
     return (''.join([name, '.d%s' % weekday, ext]),
             ''.join([name, '.w%s' % week, ext]),
+            ''.join([name, '.m%s' % month, ext]),
             ''.join([name, '.y%s' % year, ext]))
 
 
