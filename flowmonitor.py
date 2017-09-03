@@ -858,16 +858,24 @@ class DashboardHandler(EventHandler):
             f.write(output)
 
 
-def fileiter(path, regexp):
+def fileiter(path, regexp=None):
     if isinstance(regexp, types.StringTypes):
         regexp = re.compile(regexp, re.DOTALL | re.VERBOSE)
 
     for root, _, files in os.walk(exppath(path)):
         for name in files:
             filename = os.path.join(root, name)
-            if regexp.match(filename):
+            if not regexp:
+                yield filename
+            elif regexp.match(filename):
                 yield filename
 
+
+def get_modified(path, since, regexp=None):
+    for name in fileiter(path, regexp):
+        mdate = os.stat(name).st_mtime
+        if mdate > since:
+            yield name, mdate
 
 def get_url(field):
     url = field.get('slug')
@@ -876,7 +884,7 @@ def get_url(field):
         url = quote(url)
     else:
         # url = field.get('title', '')
-        url = field['title']
+        url = field.get('title', '')
         url = url.lower().replace(' ', '-')
     lang = field.get('lang')
     if lang and lang != 'en':
