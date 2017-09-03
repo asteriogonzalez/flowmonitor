@@ -13,6 +13,7 @@ from the application section in http://mega.nz
 Rotation Policy
 ================
 Rotation policy is also supported:
+
 - 7-daily (mon-sun) :       e.g. flowmonitor.git.d6.7z
 - 1-per-week of the month:  e.g. flowmonitor.git.w0.7z
 - 1 per month:              e.g. flowmonitor.git.m9.7z
@@ -26,6 +27,25 @@ and hence all files correspond with the last update.
 
 As soon a new day comes, some of the previous backups files will be left
 behind creating the rotation sequence.
+
+Login into MEGA
+=================
+
+Currently user must manually login into MEGA account for 1st time
+using
+
+``` bash
+$ mega-cmd
+MEGA CMD> login your@email.com
+Password: xxxxx
+[info: 10:13:01] Fetching nodes ...
+<###############################|(1/1 MB: 100.00 %)
+[info: 10:13:05] Login complete as your@email.com
+your@email.com:/$ quit
+[info: 10:13:37] closing application ...
+$
+```
+
 
 """
 import datetime
