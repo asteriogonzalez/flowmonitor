@@ -1036,11 +1036,48 @@ def translate_done(status):
     keys = {' ': 'Next', None: 'Done',}
     return keys.get(status, '??')
 
+
+class BackupHandler(EventHandler):
+    """A simple Handler that create backups of .git repositories and upload to MEGA.
+    """
+    def __init__(self, path):
+        path = os.path.join(path, '.git')
+        extensions = '.md'
+        EventHandler.__init__(self, path, extensions)
+
+        self.temp = '/tmp'
+        self.last_backup = time.time()
+        self.last_update = self.last_backup
+
+    def on_idle(self):
+        "Performs syncing tasks"
+
+        print("Idle on Backup")
+        if self.must_update():
+            # p = Process(target=self.sync)
+            # p.start()
+            # p.join()
+            self.create_backup()  # for debugging
+        else:
+            print("Nothing has change from last time ...")
+
+    def must_update(self):
+        self.last_update = max(get_modified(self.path, since=0), key=key1)[1]
+        return self.last_update > self.last_backup
+
+    def create_backup(self):
+        print("Creating a new Backup for %s" % self.path)
+        self.last_backup = self.last_update
+
+def key1(x): return 1
+
 # register this module Handlers
 register_handler(PelicanHandler)
 register_handler(SyncHandler)
 register_handler(PyTestHandler)
 register_handler(DashboardHandler)
+
+register_handler(BackupHandler)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,

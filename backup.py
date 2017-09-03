@@ -6,13 +6,11 @@ import re
 import time
 import threading
 
-from flowmonitor import get_modified
-
+from flowmonitor import get_modified, EventHandler
 
 # TODO: return list of files not copied
 
 ERR_TIMEOUT = -1000
-
 
 class Runner(object):
     def __init__(self, cmd, timeout=120, **kw):
@@ -192,6 +190,11 @@ def rotatenames(path):
     return (''.join([name, '.d%s' % weekday, ext]),
             ''.join([name, '.w%s' % week, ext]),
             ''.join([name, '.y%s' % year, ext]))
+
+
+
+
+
 
 if __name__ == '__main__':
 
