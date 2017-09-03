@@ -871,6 +871,19 @@ def fileiter(path, regexp=None):
             elif regexp.match(filename):
                 yield filename
 
+def folderiter(path, regexp=None):
+    if isinstance(regexp, types.StringTypes):
+        regexp = re.compile(regexp, re.DOTALL | re.VERBOSE)
+
+    for root, folders, _ in os.walk(exppath(path)):
+        for name in folders:
+            filename = os.path.join(root, name)
+            if not regexp:
+                yield filename
+            elif regexp.match(filename):
+                yield filename
+
+
 
 def get_modified(path, since, regexp=None):
     for name in fileiter(path, regexp):
@@ -1050,57 +1063,66 @@ class BackupHandler(EventHandler):
     and upload to MEGA.
     """
     def __init__(self, path):
-        path = os.path.join(path, '.git')
+        # path = os.path.join(path, '.git')
         extensions = '.md'
         EventHandler.__init__(self, path, extensions)
 
         self.temp = '/tmp'
         self.remote_folder = '/backup/'
-        self.last_backup = time.time()
-        self.last_update = self.last_backup
-        self.last_working = 0
+        # self.last_backup = time.time()
+        # self.last_update = self.last_backup
+        # self.last_working = 0
+        self.last_backup = dict()
+        self.last_update = dict()
+        self.last_working = dict()
 
     def on_idle(self):
         "Performs syncing tasks"
 
         print("Idle on Backup")
-        if self.must_update():
-            # p = Process(target=self.sync)
-            # p.start()
-            # p.join()
-            self.create_backup()  # for debugging
+        for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
+            if self.must_update(repo):
+                # p = Process(target=self.sync)
+                # p.start()
+                # p.join()
+                self.create_backup(repo)  # for debugging
+                break  # be nice, only one at time
         else:
             print("Nothing has change from last time ...")
 
-    def must_update(self):
+    def must_update(self, path):
         """Check that there are new commits in git and
         the user seems to have stopped to modify working files
         before making a backup.
         """
-        self.last_update = max(get_modified(self.path, since=0), key=key1)[1]
+        self.last_update[path] = max(
+            get_modified(path, since=0),
+            key=key1)[1]
 
-        if self.last_update <= self.last_backup:
+        if self.last_backup.setdefault(path, 0) > self.last_update[path]:
             return False
 
-        parent = os.path.join(*os.path.split(self.path)[:-1])
-        self.last_working = max(get_modified(parent, since=0), key=key1)[1]
+        parent = os.path.join(*os.path.split(path)[:-1])
+        self.last_working[path] = max(
+            get_modified(parent, since=0),
+            key=key1)[1]
 
         # make a backup 30 min later than user has modified any file
         delay = 1800
-        return time.time() - self.last_working > delay
+        return time.time() - self.last_working[path] > delay
 
-    def create_backup(self):
+    def create_backup(self, path):
         "Create a New backup for the supervided path"
-        print("Creating a new Backup for %s" % self.path)
+        print("Creating a new Backup for %s" % path)
 
         bak = backup.MegaBackup()
-        zipfile = bak.compress_git(self.path)
+        zipfile = bak.compress_git(path)
         if zipfile:
             bak.start_daemon()
-            bak.upload(zipfile, self.remote_folder, rotate=True, remove_after=True)
+            bak.upload(zipfile, self.remote_folder,
+                       rotate=True, remove_after=True)
             bak.stop_daemon()
-
-            self.last_backup = time.time()
+            self.last_backup[path] = time.time()
         else:
             print("Error making backup file")
 

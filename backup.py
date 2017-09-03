@@ -111,6 +111,7 @@ class MegaBackup(object):
     MEGA commands to upload and manage the remote files.
     """
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
+    compress_cmd = ['7z', 'a', '-phello', '-mhe']
 
     def __init__(self, credentials=None):  # TODO: user credentials
         self.credentials = credentials
@@ -231,7 +232,7 @@ class MegaBackup(object):
                 return 1
             last_0 = max(get_modified(path, since=0), key=key)[1]
 
-            cmd = ['7z', 'a', '-phello', '-mhe', zipfile, path]
+            cmd = clone_list(self.compress_cmd, zipfile, path)
             stdout, returncode = run(cmd)
 
             last_1 = max(get_modified(path, since=0), key=key)[1]
@@ -256,6 +257,16 @@ class MegaBackup(object):
         if os.path.exists(git_path):
             zipfile = os.path.join('/tmp/', basename)
             self.compress(git_path, zipfile)
+
+            cmd = clone_list(self.compress_cmd, zipfile)
+            extrafiles = ['.gitignore', '.gitmodules']
+            for name in extrafiles:
+                name = os.path.join(parent, name)
+                if os.path.exists(name):
+                    cmd.append(name)
+
+            stdout, returncode = run(cmd)
+
             return zipfile
 
 
@@ -273,6 +284,10 @@ def rotatenames(path):
             ''.join([name, '.m%s' % month, ext]),
             ''.join([name, '.y%s' % year, ext]))
 
+def clone_list(alist, *args):
+    result = list(alist)
+    result.extend(args)
+    return result
 
 if __name__ == '__main__':
 
