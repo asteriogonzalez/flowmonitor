@@ -78,6 +78,9 @@ class Watcher(Thread):
 
         print "<< exiting form monitorize ..."
 
+    def stop(self):
+        self.running = False
+
     def next(self):
         # balance check iterators monitoring
         try:

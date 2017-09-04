@@ -362,7 +362,7 @@ class Flow(Persistent):
 
         try:
             while True:
-                # self.idle()
+                self.idle()
                 for counter in xrange(self.idlecycles):
                     time.sleep(self.eventpolling)  # non-locker style
                     self.next()
@@ -376,7 +376,7 @@ class Flow(Persistent):
         "Close all Flow activities and close the event queue"
         self.watcher.stop()
         self.watcher.join()
-        self.queue.close()
+        # self.queue.close()
 
     def add(self, handler):
         """Add a handler that manage some events under a directory.
