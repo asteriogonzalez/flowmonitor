@@ -225,7 +225,8 @@ class DBQueue(object):
 
         row = cursor.fetchone()
         if row:
-            print "Ingoring Duplicate event: %s" % (event, )
+            # print "Ingoring Duplicate event: %s" % (event, )
+            pass
         else:
             cursor.execute(
                 "REPLACE INTO events VALUES (?, ?, ?, ?, ?, ?, ?)", event
@@ -334,6 +335,7 @@ class Flow(Persistent):
         self.eventpolling = 0.2
         self.idlecycles = 200
         self.configfile = ''
+        self.paths = list()
 
     def run(self):
         """Main loop of the process.
@@ -372,7 +374,20 @@ class Flow(Persistent):
     def add(self, handler):
         """Add a handler that manage some events under a directory.
         """
-        self.observer.schedule(self.monitor, handler.path, recursive=True)
+        new = False
+        for path in list(self.paths):
+            if handler.path == path:
+                break
+            elif handler.path in path:  # subtree
+                self.paths.remove(path)
+                new = True
+        else:
+            new = True
+
+        if new:
+            self.observer.schedule(self.monitor, handler.path, recursive=True)
+            self.paths.append(handler.path)
+
         self.handlers.append(handler)
         handler.flow = self
         loginfo('Add handler: %s on %s' % (handler.__class__.__name__,
@@ -461,6 +476,7 @@ class Flow(Persistent):
             self.add(handler)
 
 
+
 class EventMonitor(FileSystemEventHandler):
     """Logs all the events captured."""
 
@@ -478,10 +494,11 @@ class EventMonitor(FileSystemEventHandler):
         # ev = self.tran[ev]
         path = os.path.abspath(path)
         ev = Event(now, path, ev, folder, 5, 10, path2)
-        for handler in self.flow.handlers:
-            if ev.path.startswith(handler.path):
-                if handler.match(ev):
-                    flow.queue.push(ev)
+        flow.queue.push(ev)
+        # for handler in self.flow.handlers:
+            # if ev.path.startswith(handler.path):
+                # if handler.match(ev):
+                    # flow.queue.push(ev)
 
 
 class EventHandler(Persistent):
@@ -503,7 +520,7 @@ class EventHandler(Persistent):
 
     def match(self, event):
         "Determine if we can handle this event"
-        return self._match(event.path)
+        return not self.extensions or self._match(event.path)
 
     def _match(self, filename):
         ext = os.path.splitext(filename)[-1]
@@ -546,7 +563,8 @@ class PelicanHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        extensions = '.md'
+        path = os.path.join(path, 'content')
+        extensions = ['.md', '.py']
         EventHandler.__init__(self, path, extensions)
 
     def on_created(self, event):
