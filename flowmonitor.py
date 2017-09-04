@@ -16,7 +16,7 @@ TODO:
 
 """
 import codecs
-from collections import namedtuple, OrderedDict
+from collections import namedtuple, OrderedDict, deque
 import datetime
 from getpass import getuser
 import hashlib
@@ -36,9 +36,11 @@ import types
 from urllib import quote
 import yaml
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemMovedEvent, \
-     FileSystemEventHandler  # , LoggingEventHandler
+# from watchdog.observers import Observer
+# from watchdog.events import FileSystemMovedEvent, \
+     # FileSystemEventHandler  # , LoggingEventHandler
+
+from watcher import Watcher, event_key
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
@@ -65,13 +67,13 @@ def register_handler(klass):
     handlers[name[0]] = klass
 
 
-Event = namedtuple('Event', ('date', 'path', 'event', 'folder',
+Event_DB_OLD = namedtuple('Event', ('date', 'path', 'event', 'folder',
                              'countdown', 'restart', 'path2'))
 
 
-def event_key(event):
-    "Provide a unique tuple that can be used as key for the event"
-    return event.path, event.folder
+# def event_key(event):
+    # "Provide a unique tuple that can be used as key for the event"
+    # return event.path, event.folder
 
 
 class Task(object):
@@ -307,6 +309,8 @@ class DBQueue(object):
         conn.commit()
 
 
+
+
 class Flow(Persistent):
     """This class implements the core for event flows and processing.
 
@@ -316,7 +320,7 @@ class Flow(Persistent):
     """
     CFG_NAME = 'flow.yaml'
 
-    def __init__(self, queue):
+    def __init__(self):
         """This class needs a external queue to manage persistent events
         then creates:
         - an observer instantce that monitorize File System
@@ -327,15 +331,17 @@ class Flow(Persistent):
         Args:
             queue (:obj:`instance`, ): `queue` that stores events.
         """
-        self.queue = queue
-        self.observer = Observer()
-        self.observer.start()
-        self.monitor = EventMonitor(self)
+        self.queue = deque()
+        self.watcher = Watcher()
+        self.watcher.dispatch = self.dispatch
+        self.ignored__ = dict()
+        # self.monitor = EventMonitor(self)
         self.handlers = list()
+
         self.eventpolling = 0.2
         self.idlecycles = 200
         self.configfile = ''
-        self.paths = list()
+        # self.paths = list()
 
     def run(self):
         """Main loop of the process.
@@ -352,10 +358,11 @@ class Flow(Persistent):
         self.save_config()
 
         loginfo('Start flow monitor')
+        self.watcher.start()
 
         try:
             while True:
-                self.idle()
+                # self.idle()
                 for counter in xrange(self.idlecycles):
                     time.sleep(self.eventpolling)  # non-locker style
                     self.next()
@@ -367,26 +374,15 @@ class Flow(Persistent):
 
     def close(self):
         "Close all Flow activities and close the event queue"
-        self.observer.stop()
-        self.observer.join()
+        self.watcher.stop()
+        self.watcher.join()
         self.queue.close()
 
     def add(self, handler):
         """Add a handler that manage some events under a directory.
         """
-        new = False
-        for path in list(self.paths):
-            if handler.path == path:
-                break
-            elif handler.path in path:  # subtree
-                self.paths.remove(path)
-                new = True
-        else:
-            new = True
 
-        if new:
-            self.observer.schedule(self.monitor, handler.path, recursive=True)
-            self.paths.append(handler.path)
+        self.watcher.add_watcher(handler.path, handler.patterns)
 
         self.handlers.append(handler)
         handler.flow = self
@@ -395,10 +391,10 @@ class Flow(Persistent):
 
     def next(self):
         "Try to execute the next event in queue"
-        event = self.queue.pop()
-        if event is None:
+        if not self.queue:
             pass
         else:
+            event = self.queue.popleft()
             try:
                 for handler in self.handlers:
                     if event.path.startswith(handler.path) and \
@@ -406,9 +402,7 @@ class Flow(Persistent):
                         handler.process(event)
             except Exception, why:
                 logwarning(why)
-                self.queue.restart(event)
-            else:
-                self.queue.finish(event)
+
 
     def idle(self):
         "Performs tasks that suit in idle loops from time to time"
@@ -476,29 +470,40 @@ class Flow(Persistent):
             self.add(handler)
 
 
-
-class EventMonitor(FileSystemEventHandler):
-    """Logs all the events captured."""
-
-    def __init__(self, flow):
-        self.flow = flow
-
-    def on_any_event(self, event):
-        now = time.time()
-        if isinstance(event, FileSystemMovedEvent):
-            ev, path2, path, folder = event.key
+    def dispatch(self, event):
+        key = event_key(event)
+        if self.ignored__.pop(key, None):
+            print "Ignoring autogenerated event: %s" % (event, )
         else:
-            ev, path, folder = event.key
-            path2 = ''
+            print "FLOW: Procesing: %s: %s at %s from FLOW" % event
+            self.queue.append(event)
 
-        # ev = self.tran[ev]
-        path = os.path.abspath(path)
-        ev = Event(now, path, ev, folder, 5, 10, path2)
-        flow.queue.push(ev)
-        # for handler in self.flow.handlers:
-            # if ev.path.startswith(handler.path):
-                # if handler.match(ev):
-                    # flow.queue.push(ev)
+    def ignore(self, event):
+        key = event_key(event)
+        self.ignored__[key] = event
+
+# class EventMonitor(FileSystemEventHandler):
+    # """Logs all the events captured."""
+
+    # def __init__(self, flow):
+        # self.flow = flow
+
+    # def on_any_event(self, event):
+        # now = time.time()
+        # if isinstance(event, FileSystemMovedEvent):
+            # ev, path2, path, folder = event.key
+        # else:
+            # ev, path, folder = event.key
+            # path2 = ''
+
+        # # ev = self.tran[ev]
+        # path = os.path.abspath(path)
+        # ev = Event(now, path, ev, folder, 5, 10, path2)
+        # flow.queue.push(ev)
+        # # for handler in self.flow.handlers:
+            # # if ev.path.startswith(handler.path):
+                # # if handler.match(ev):
+                    # # flow.queue.push(ev)
 
 
 class EventHandler(Persistent):
@@ -517,10 +522,12 @@ class EventHandler(Persistent):
 
         self.path = os.path.abspath(path)
         self.extensions = split_liststr(extensions)
+        self.patterns = r'|'.join([r'.*\%s$' % ext for ext in self.extensions])
+        self.regexp = re.compile(self.patterns, re.DOTALL)
 
     def match(self, event):
         "Determine if we can handle this event"
-        return not self.extensions or self._match(event.path)
+        return not self.extensions or self.regexp.match(event.path)
 
     def _match(self, filename):
         ext = os.path.splitext(filename)[-1]
@@ -563,29 +570,24 @@ class PelicanHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        path = os.path.join(path, 'content')
         extensions = ['.md', '.py']
+        if os.path.split(path)[-1] != 'content':
+            path = os.path.join(path, 'content')
+
         EventHandler.__init__(self, path, extensions)
+
+        self.project_root = os.path.split(self.path)[0]
+        # self.clear_output = True
 
     def on_created(self, event):
         "Fired when a new file is created"
-        info = os.stat(event.path)
-        if info.st_size <= 0:
-            loginfo('Fill %s from template' % event.path)
-
-            lines = self.find_template(event)
-            if lines:
-                self.update_contents(event, lines)
+        return self.on_modified(event)
 
     def on_modified(self, event):
         "Fired when a file is modified somehow"
-        info = os.stat(event.path)
-        if info.st_size <= 0:
-            return self.on_created(event)
-
         with file(event.path, 'rt') as f:
             lines = f.readlines()
-            self.update_contents(event, lines)
+            self.update_file(event, lines)
 
     def on_moved(self, event):
         "Fired when a file is renamed of moved"
@@ -593,7 +595,19 @@ class PelicanHandler(EventHandler):
 
     def on_deleted(self, event):
         "Fired when a file is deleted"
-        pass
+        self.make(event)
+
+    def update_file(self, event, lines):
+        """Update headers and variables of each file line"""
+        contents = self.update_contents(event, lines)
+        if not contents:
+            template = self.find_template(event)
+            if template:
+                template.extend(lines)
+                contents = self.update_contents(event, template)
+
+        self.write_file(event, contents)
+        self.make(event)
 
     def update_contents(self, event, lines):
         """Update headers and variables of each file line"""
@@ -601,7 +615,13 @@ class PelicanHandler(EventHandler):
         t = (event.date // 300) * 300
         headers['Modified'] = datetime.datetime.fromtimestamp(t) \
             .strftime('%Y-%m-%d %H:%M')
-        self.update_headers(lines, headers)
+        n = self.update_headers(lines, headers)
+
+        if n <= 0:
+            # Seems to be a new article, without any headers
+            # so insert the template and append existing contents
+            # to the end.
+            return []
 
         if not self._re_templates.match(event.path):
             replace = dict()
@@ -611,11 +631,11 @@ class PelicanHandler(EventHandler):
             replace[r'\$author\$'] = getuser()
             self.update_replacements(lines, replace)
 
-        self.write_file(event, lines)
-        self.make(event)
+        return lines
 
     def update_headers(self, lines, replace):
         "Replace some file headers and write down the new content"
+        n = 0
         for i, line in enumerate(lines):
             m = self._re_headers.match(line)
             if m:
@@ -624,6 +644,8 @@ class PelicanHandler(EventHandler):
                     line = self._re_headers.sub(
                         r'\g<name>: %s\n' % value, line)
                     lines[i] = line
+                    n += 1
+        return n
 
     def update_replacements(self, lines, replace):
         "Replace some file headers and write down the new content"
@@ -643,7 +665,7 @@ class PelicanHandler(EventHandler):
         Request to ignore the next modified event from this file
         breaking a infinite self-update loop.
         """
-        self.flow.queue.ignore(event)
+        self.flow.ignore(event)
 
         with file(event.path, 'wt') as f:
             f.writelines(lines)
@@ -656,7 +678,7 @@ class PelicanHandler(EventHandler):
         best_match = 0
         lines = ['this is an empty article!']
 
-        for root, folders, files in os.walk(self.path):
+        for root, folders, files in os.walk(self.project_root):
             if self._re_templates.match(root):
                 for name in files:
                     namelower = name.lower()
@@ -675,8 +697,17 @@ class PelicanHandler(EventHandler):
 
         The event is passed as a reference.
         """
+
+        # Pelican delete all content, preserving the folder 'output'
+        # so this code is not necessary
+        # if False and self.clear_output:
+            # output = os.path.join(self.project_root, 'output')
+            # for filename in fileiter(output, r'.*\.(css|html|js|jpg|png|gif|svg|ico|json)$'):
+                # print "Removing:", filename
+                # os.unlink(filename)
+
         args = ['pelican']
-        proc = subprocess.Popen(args, cwd=self.path)
+        proc = subprocess.Popen(args, cwd=self.project_root)
 
         proc.wait()
         return proc.returncode
@@ -1163,9 +1194,9 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
 
-    queue = DBQueue()
-    flow = Flow(queue)
-
+    # queue = DBQueue()
+    # flow = Flow(queue)
+    flow = Flow()
     flow.config()
 
     flow.run()

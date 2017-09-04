@@ -3,7 +3,7 @@ import time
 import datetime
 import re
 from threading import Thread
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 
 
 def print_mdate(path):
@@ -18,6 +18,13 @@ def exppath(path):
     path = os.path.abspath(path)
     return path + os.path.sep
 
+
+Event = namedtuple('Event', ('event', 'path', 'date'))
+
+
+def event_key(event):
+    "Provide a unique tuple that can be used as key for the event"
+    return event[:2]
 
 class Watcher(Thread):
     def __init__(self, *args, **kw):
@@ -78,12 +85,12 @@ class Watcher(Thread):
             while self.running:
                 gen = queue.pop(0)
                 try:
-                    path, mtime = gen.next()
+                    event = gen.next()
                     queue.append(gen)
-                    if path:
-                        if self.add_favorite(path, mtime):
-                            yield path, mtime
-                            self.last_modified = min(self.last_modified, mtime)
+                    if event.path:
+                        if self.add_favorite(event):
+                            yield event
+                            self.last_modified = min(self.last_modified, event.date)
                 except StopIteration:
                     func = getattr(self, gen.gi_code.co_name)
                     queue.append(func())  # restart again
@@ -106,35 +113,43 @@ class Watcher(Thread):
 
                     mtime = os.stat(path).st_mtime
                     if mtime > since and self.match_watcher(path):
-                        yield path, mtime
+                        yield Event('modified', path, mtime)
                         self.last_modified = max(self.last_modified, mtime)
                 else:
                     # after process a folder, we return control to
                     # collaborate in multitasking
                     # print "ROOT:", root
-                    yield None, None
+                    yield Event('none', '', 0)
 
         self.relax_search()
 
     def favoriteiterator(self):
         since = self.last_modified  # make a copy at the begining
         for path, last_time in self.favorite_files.items():
-            mtime = os.stat(path).st_mtime
-            if mtime > last_time and mtime > since:
-                yield path, mtime
-                self.last_modified = max(self.last_modified, mtime)
+            if os.path.exists(path):
+                mtime = os.stat(path).st_mtime
+                if mtime > last_time and mtime > since:
+                    yield Event('modified', path, mtime)
+                    self.last_modified = max(self.last_modified, mtime)
+            else:
+                self.favorite_files.pop(path)
+                yield Event('deleted', path, time.time())
 
-    def add_favorite(self, path, mtime):
+    def add_favorite(self, event):
         """Add files for high frequency monitoring that match
         some handler and determine if any handler would attend
         the event.
         """
-        if self.favorite_files.pop(path, None):
-            self.favorite_files[path] = mtime
+        if event.event in ('deleted'):
+            self.favorite_files.pop(event.path, None)
             return True
 
-        if self.match_watcher(path):
-            self.favorite_files[path] = mtime
+        if self.favorite_files.pop(event.path, None):
+            self.favorite_files[event.path] = event.date
+            return True
+
+        if self.match_watcher(event.path):
+            self.favorite_files[event.path] = event.date
             self.relax_search()
 
             if len(self.favorite_files) > self.max_favorites:
@@ -181,7 +196,7 @@ if __name__ == '__main__':
 
     watcher.start()
 
-    time.sleep(1000)
+    time.sleep(3600)
     watcher.running = False
 
     print "-End-"
