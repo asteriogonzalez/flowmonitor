@@ -111,7 +111,7 @@ class MegaBackup(object):
     MEGA commands to upload and manage the remote files.
     """
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
-    compress_cmd = ['7z', 'a', '-phello', '-mhe']
+    compress_cmd = ['nice', '7z', 'a', '-phello', '-mhe', '-mx9', '-mmt']
 
     def __init__(self, credentials=None):  # TODO: user credentials
         self.credentials = credentials
@@ -123,6 +123,7 @@ class MegaBackup(object):
         self.daemon = subprocess.Popen(args, shell=False, cwd='/tmp')
         if not self.daemon.pid:
             raise RuntimeError("Unable to launch daemon login")
+        time.sleep(1)
 
     def stop_daemon(self):
         "Stop the mega-cmd daemon"
@@ -150,6 +151,8 @@ class MegaBackup(object):
         print "OUT: %s" % output
         print "RET: [%s]" % returncode
 
+        time.sleep(1)
+
         return output, returncode
 
     def upload_folder(self, folder, destination, remove_after=False):
@@ -166,7 +169,7 @@ class MegaBackup(object):
                 if remove_after:
                     os.unlink(path)
 
-    def upload(self, localfile, destination, rotate=False, remove_after=False):
+    def upload(self, localfile, destination, remove_after=False):
         """Upload a file into MEGA and create rotate file policy is needed"""
         ext = os.path.splitext(destination)
         if not ext[-1]:
@@ -175,17 +178,19 @@ class MegaBackup(object):
                 os.path.basename(localfile))
 
         result = self.replace(localfile, destination)
-        if rotate:
-            names = rotatenames(destination)
-            for target in names[1:]:
-                self.execute('cp', destination, target)
-
-            self.execute('mv', destination, names[0])
 
         if remove_after:
             os.unlink(localfile)
 
         return result
+
+    def safe_cmd(self, cmd, source, target, delete_source=True):
+        "move only if target don't exists. delete source is optional"
+        output, returncode = self.execute('ls', target)
+        if returncode != 0:
+            self.execute(cmd, source, target)
+        elif delete_source:
+            self.execute('rm', source)
 
     def replace(self, path, where, quick=True):
         "Replace a file safely in remote server"
@@ -216,7 +221,8 @@ class MegaBackup(object):
             try:
                 result = self.execute('put', '-c',
                                       path,
-                                      os.path.dirname(where)
+                                      where,
+                                      # os.path.dirname(where)
                                       )
                 time.sleep(1)  # nice with mega
             except subprocess.CalledProcessError:
@@ -237,37 +243,37 @@ class MegaBackup(object):
 
             last_1 = max(get_modified(path, since=0), key=key)[1]
             if last_0 == last_1:
-                break
+                return True
             print('contents are update while compressing folder, retry %s'
                   % attempt)
             time.sleep(1)
 
-        return stdout, returncode
+        return False
 
     def compress_git(self, path):
         "Compress the git repository of folder"
         if path.endswith('.git'):
             git_path = path
             parent = os.path.join(*os.path.split(path)[:-1])
-            basename = os.path.basename(parent) + '.git.7z'
+            basename = os.path.basename(parent)
         else:
             git_path = os.path.join(path, '.git')
-            basename = os.path.basename(path) + '.git.7z'
+            basename = os.path.basename(path)
 
         if os.path.exists(git_path):
+            today = datetime.date.today()
+            basename = '%s-%s.git.7z' % (basename, today.toordinal())
             zipfile = os.path.join('/tmp/', basename)
-            self.compress(git_path, zipfile)
+            if self.compress(git_path, zipfile):
+                cmd = clone_list(self.compress_cmd, zipfile)
+                extrafiles = ['.gitignore', '.gitmodules']
+                for name in extrafiles:
+                    name = os.path.join(parent, name)
+                    if os.path.exists(name):
+                        cmd.append(name)
+                run(cmd)
 
-            cmd = clone_list(self.compress_cmd, zipfile)
-            extrafiles = ['.gitignore', '.gitmodules']
-            for name in extrafiles:
-                name = os.path.join(parent, name)
-                if os.path.exists(name):
-                    cmd.append(name)
-
-            stdout, returncode = run(cmd)
-
-            return zipfile
+                return zipfile
 
 
 def rotatenames(path):

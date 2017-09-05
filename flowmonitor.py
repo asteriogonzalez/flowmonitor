@@ -342,6 +342,8 @@ class Flow(Persistent):
         self.idlecycles = 200
         self.configfile = ''
         # self.paths = list()
+        self._idle_running_klasses = dict()
+        self._idle_queue = list()
 
     def run(self):
         """Main loop of the process.
@@ -403,7 +405,6 @@ class Flow(Persistent):
             except Exception, why:
                 logwarning(why)
 
-
     def idle(self):
         "Performs tasks that suit in idle loops from time to time"
         # now = time.time()
@@ -411,7 +412,28 @@ class Flow(Persistent):
         # if event:
         print "Do something idle ..."
         for handler in self.handlers:
-            handler.on_idle()
+            if handler not in self._idle_queue:
+                self._idle_queue.append(handler)
+
+        for handler in list(self._idle_queue):
+            klass = handler.__class__
+            running = self._idle_running_klasses.get(klass)
+            if running:
+                if running._idle_thread:
+                    if running._idle_thread.isAlive():
+                        continue
+                    else:
+                        running._idle_thread.join()
+                        running._idle_thread = None
+                        self._idle_running_klasses.pop(klass)
+                        running = None
+
+            if not running:
+                handler._idle_thread = threading.Thread(target=handler.on_idle)
+                handler._idle_thread.start()
+                self._idle_running_klasses[klass] = handler
+                self._idle_queue.remove(handler)
+                time.sleep(1)
 
     def save_config(self, configfile=None):
         """Save internal config to a file"""
@@ -525,6 +547,9 @@ class EventHandler(Persistent):
         self.patterns = r'|'.join([r'.*\%s$' % ext for ext in self.extensions])
         self.regexp = re.compile(self.patterns, re.DOTALL)
 
+        self._idle_thread = None
+
+
     def match(self, event):
         "Determine if we can handle this event"
         return not self.extensions or self.regexp.match(event.path)
@@ -552,6 +577,7 @@ class EventHandler(Persistent):
 
     def on_idle(self):
         "Performs idle tasks"
+        print "Idle on %s" % self.__class__.__name__
 
 
 class PelicanHandler(EventHandler):
@@ -861,7 +887,7 @@ class DashboardHandler(EventHandler):
         "Performs syncing tasks"
 
         print "Idle on Dashboard"
-        if self.must_update():
+        if self.must_update_git():
             # p = Process(target=self.sync)
             # p.start()
             # p.join()
@@ -869,7 +895,7 @@ class DashboardHandler(EventHandler):
         else:
             print "Nothing has change from last time ..."
 
-    def must_update(self):
+    def must_update_git(self):
         for filename in fileiter(self.path, '.*\.md$'):
             if filename == self.dashborad_file:
                 continue
@@ -934,11 +960,14 @@ def folderiter(path, regexp=None):
 
 
 
-def get_modified(path, since, regexp=None):
-    for name in fileiter(path, regexp):
-        mdate = os.stat(name).st_mtime
-        if mdate > since:
-            yield name, mdate
+def get_modified(path, since=0, regexp=None):
+    if os.path.isdir(path):
+        for name in fileiter(path, regexp):
+            mdate = os.stat(name).st_mtime
+            if mdate > since:
+                yield name, mdate
+    else:
+        yield path, os.stat(path).st_mtime
 
 
 def get_url(field):
@@ -1117,10 +1146,8 @@ class BackupHandler(EventHandler):
         EventHandler.__init__(self, path, extensions)
 
         self.temp = '/tmp'
-        self.remote_folder = '/backup/'
-        # self.last_backup = time.time()
-        # self.last_update = self.last_backup
-        # self.last_working = 0
+        self.remote_folder = '/backup'
+
         self.last_backup = dict()
         self.last_update = dict()
         self.last_working = dict()
@@ -1128,24 +1155,62 @@ class BackupHandler(EventHandler):
     def on_idle(self):
         "Performs syncing tasks"
 
-        print("Idle on Backup")
+        print("Idle on Backup: %s" % self.path)
         for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
-            if self.must_update(repo):
-                # p = Process(target=self.sync)
-                # p.start()
-                # p.join()
+            if self.must_update_git(repo):
                 self.create_backup(repo)  # for debugging
-                break  # be nice, only one at time
+                self.rotate_files(repo)
+
         else:
             print("Nothing has change from last time ...")
 
-    def must_update(self, path):
+    def must_update_git(self, path):
         """Check that there are new commits in git and
         the user seems to have stopped to modify working files
         before making a backup.
         """
+        info = get_git_backup_info(path)
+
+        bak = backup.MegaBackup()
+        bak.start_daemon()
+        remote_path = '%s/%s' % (self.remote_folder, info['remotename'])
+        output, returncode = bak.execute('ls', remote_path)
+        bak.stop_daemon()
+
+        if returncode == 203:  # Couldn't find
+            assert "Couldn't find" in output
+            return True
+
+    def get_git_timestamp(self, path):
+        p = subprocess.Popen(
+            # ["git", "rev-list" "--format=format:'%ai'",
+             # "--max-count=1", "`git rev-parse HEAD`"],
+            ["git rev-list `git rev-parse HEAD` --max-count=1 --format='%ai'"],
+            cwd=path,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        out, err = p.communicate()
+
+        # '2017-07-12 08:46:33'
+        timestamp = re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}', out).group(0)
+        timestamp = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+        timestamp = time.mktime(timestamp.timetuple())
+
+        self.last_update[path] = timestamp
+
+        if self.last_backup.setdefault(path, 0) > self.last_update[path]:
+            return False
+
+        return True
+
+    def must_update(self, path):
+        """Check that there are updates in working files
+        before making a backup.
+        """
         self.last_update[path] = max(
-            get_modified(path, since=0),
+            get_modified(path),
             key=key1)[1]
 
         if self.last_backup.setdefault(path, 0) > self.last_update[path]:
@@ -1160,6 +1225,7 @@ class BackupHandler(EventHandler):
         delay = 1800
         return time.time() - self.last_working[path] > delay
 
+
     def create_backup(self, path):
         "Create a New backup for the supervided path"
         print("Creating a new Backup for %s" % path)
@@ -1167,17 +1233,97 @@ class BackupHandler(EventHandler):
         bak = backup.MegaBackup()
         zipfile = bak.compress_git(path)
         if zipfile:
+            info = get_git_backup_info(path)
+            remote_path = os.path.join(self.remote_folder, info['remotename'])
+
             bak.start_daemon()
-            bak.upload(zipfile, self.remote_folder,
-                       rotate=True, remove_after=True)
+            bak.upload(zipfile, remote_path, remove_after=True)
             bak.stop_daemon()
             self.last_backup[path] = time.time()
         else:
             print("Error making backup file")
 
+    def rotate_files(self, path):
+        regexp = re.compile(r'(?P<reponame>\w+)-(?P<ordinal>\d+)(?P<ext>.*)$',
+                            re.DOTALL)
+        info = get_git_backup_info(path)
+
+        bak = backup.MegaBackup()
+        bak.start_daemon()
+
+        remote_path = '%s/%s' % (self.remote_folder, info['reponame'])
+        output, returncode = bak.execute('ls', remote_path)
+        if returncode == 0:
+            # get already remote files info
+            # and calculate the final state of all pending ones
+            final = dict()
+            all_files = output.splitlines()
+            all_files.sort()
+            for name in all_files:
+                m = regexp.match(name)
+                if m:
+                    m = m.groupdict()
+                    date = datetime.date.fromordinal(int(m['ordinal']))
+                    names = rotate_names(date, m['reponame'], m['ext'])
+                    name = os.path.join(remote_path, name)
+                    for target in names:
+                        target = os.path.join(remote_path, target)
+                        final[target] = name
+            # delete the not used first
+            # (in case of conexion interrpuption, is safer)
+            used = set(final.values())
+            for target in all_files:
+                target = os.path.join(remote_path, target)
+                if target not in used:
+                    bak.execute('rm', target)
+
+            # rename the 'survival' ones
+            for placeholder, survival in final.items():
+                bak.execute('mv', survival, placeholder)
+
+
+        bak.stop_daemon()
+
 
 def key1(x): return 1
 
+
+def rotate_names(date, name, ext):
+    "Create a set of rotate names from a given path"
+    weekday = date.weekday()
+    week = date.day // 7
+    month = date.month
+    year = str(date.year)[2:]
+
+    return (''.join([name, '.d%s' % weekday, ext]),
+            ''.join([name, '.w%s' % week, ext]),
+            ''.join([name, '.m%s' % month, ext]),
+            ''.join([name, '.y%s' % year, ext]))
+
+
+def get_git_backup_info(path):
+    "Returns many info about git back based on repository path"
+    if path.endswith('.git'):
+        git_path = path
+        parent = os.path.join(*os.path.split(path)[:-1])
+        basename = os.path.basename(parent)
+    else:
+        git_path = os.path.join(path, '.git')
+        basename = os.path.basename(path)
+
+    today = datetime.date.today()
+    basename = '%s-%s.git.7z' % (basename, today.toordinal())
+    reponame = os.path.basename(parent)
+    remotename = os.path.join(reponame, basename)
+
+    info = dict(
+        git_path=git_path,
+        parent=parent,
+        basename=basename,
+        reponame=reponame,
+        remotename=remotename
+    )
+    return info
 
 # register this module Handlers
 register_handler(PelicanHandler)
