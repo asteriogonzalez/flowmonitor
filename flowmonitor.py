@@ -1258,7 +1258,12 @@ class BackupHandler(EventHandler):
             # and calculate the final state of all pending ones
             final = dict()
             all_files = output.splitlines()
+            # don't use the 'today' file, so means lock for future uploads
+            if info['basename'] in all_files:
+                all_files.remove(info['basename'])
+
             all_files.sort()
+            matched_files = list()
             for name in all_files:
                 m = regexp.match(name)
                 if m:
@@ -1266,20 +1271,23 @@ class BackupHandler(EventHandler):
                     date = datetime.date.fromordinal(int(m['ordinal']))
                     names = rotate_names(date, m['reponame'], m['ext'])
                     name = os.path.join(remote_path, name)
+                    matched_files.append(name)
                     for target in names:
                         target = os.path.join(remote_path, target)
                         final[target] = name
             # delete the not used first
             # (in case of conexion interrpuption, is safer)
             used = set(final.values())
-            for target in all_files:
-                target = os.path.join(remote_path, target)
+            for target in matched_files:
                 if target not in used:
                     bak.execute('rm', target)
 
             # rename the 'survival' ones
             for placeholder, survival in final.items():
-                bak.execute('mv', survival, placeholder)
+                bak.execute('cp', survival, placeholder)
+
+            for survival in set(final.values()):
+                bak.execute('rm', survival)
 
 
         bak.stop_daemon()
