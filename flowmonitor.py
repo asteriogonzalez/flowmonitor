@@ -1152,34 +1152,49 @@ class BackupHandler(EventHandler):
         self.last_update = dict()
         self.last_working = dict()
 
+        self._reset_remote_checking = 0
+
     def on_idle(self):
         "Performs syncing tasks"
 
         print("Idle on Backup: %s" % self.path)
+
+        # allow to inspect the remote site from time to time
+        self._reset_remote_checking -= 1
+        if self._reset_remote_checking < 0:
+            self._reset_remote_checking = 50
+            self.last_backup.clear()
+
+        # check each repository for backing up
         for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
             if self.must_update_git(repo):
                 self.create_backup(repo)  # for debugging
                 self.rotate_files(repo)
-
         else:
-            print("Nothing has change from last time ...")
+            print("Backup: no commit from last time ...")
+
 
     def must_update_git(self, path):
         """Check that there are new commits in git and
         the user seems to have stopped to modify working files
         before making a backup.
         """
-        info = get_git_backup_info(path)
+        timestamp = self.get_git_timestamp(self.path)
+        if timestamp > self.last_backup.get(path, 0):
+            info = get_git_backup_info(path)
 
-        bak = backup.MegaBackup()
-        bak.start_daemon()
-        remote_path = '%s/%s' % (self.remote_folder, info['remotename'])
-        output, returncode = bak.execute('ls', remote_path)
-        bak.stop_daemon()
+            bak = backup.MegaBackup()
+            bak.start_daemon()
+            remote_path = '%s/%s' % (self.remote_folder, info['remotename'])
+            output, returncode = bak.execute('ls', remote_path)
+            bak.stop_daemon()
 
-        if returncode == 203:  # Couldn't find
-            assert "Couldn't find" in output
-            return True
+            if returncode == 203:  # Couldn't find
+                assert "Couldn't find" in output
+                return True
+
+        self.last_backup[path] = timestamp
+        return False
 
     def get_git_timestamp(self, path):
         p = subprocess.Popen(
@@ -1198,12 +1213,7 @@ class BackupHandler(EventHandler):
         timestamp = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         timestamp = time.mktime(timestamp.timetuple())
 
-        self.last_update[path] = timestamp
-
-        if self.last_backup.setdefault(path, 0) > self.last_update[path]:
-            return False
-
-        return True
+        return timestamp
 
     def must_update(self, path):
         """Check that there are updates in working files
@@ -1239,7 +1249,7 @@ class BackupHandler(EventHandler):
             bak.start_daemon()
             bak.upload(zipfile, remote_path, remove_after=True)
             bak.stop_daemon()
-            self.last_backup[path] = time.time()
+            self.last_backup[path] = self.get_git_timestamp(path)
         else:
             print("Error making backup file")
 
