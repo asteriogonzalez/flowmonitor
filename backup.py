@@ -261,6 +261,10 @@ class MegaBackup(object):
             basename = os.path.basename(path)
 
         if os.path.exists(git_path):
+            # use garbage collector for this repository
+            # before making backup
+            run(['git', 'gc'], cwd=path)
+
             today = datetime.date.today()
             basename = '%s-%s.git.7z' % (basename, today.toordinal())
             zipfile = os.path.join('/tmp/', basename)
