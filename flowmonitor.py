@@ -1193,7 +1193,7 @@ class BackupHandler(EventHandler):
                 assert "Couldn't find" in output
                 return True
 
-        self.last_backup[path] = timestamp
+        # self.last_backup[path] = timestamp
         return False
 
     def get_git_timestamp(self, path):
