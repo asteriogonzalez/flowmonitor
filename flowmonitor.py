@@ -16,7 +16,7 @@ TODO:
 
 """
 import codecs
-from collections import namedtuple, OrderedDict, deque
+from collections import OrderedDict, deque
 import datetime
 from getpass import getuser
 import hashlib
@@ -27,7 +27,6 @@ import os
 # from pprint import pprint
 import random
 import re
-import sqlite3
 import sys
 import subprocess
 import threading
@@ -35,10 +34,6 @@ import time
 import types
 from urllib import quote
 import yaml
-
-# from watchdog.observers import Observer
-# from watchdog.events import FileSystemMovedEvent, \
-     # FileSystemEventHandler  # , LoggingEventHandler
 
 from watcher import Watcher, event_key
 
@@ -65,15 +60,6 @@ def register_handler(klass):
     name = klass.__name__.lower()
     name = name.split('handler')
     handlers[name[0]] = klass
-
-
-Event_DB_OLD = namedtuple('Event', ('date', 'path', 'event', 'folder',
-                             'countdown', 'restart', 'path2'))
-
-
-# def event_key(event):
-    # "Provide a unique tuple that can be used as key for the event"
-    # return event.path, event.folder
 
 
 class Task(object):
@@ -167,150 +153,6 @@ class Persistent(object):
         self.__dict__.update(cfg)
 
 
-class DBQueue(object):
-    """This class provide a Persiste Queue for events using sqlite.
-
-    As sqlite doesn't suppor shared connection between threads,
-    we implement a simple connection factory for the current thread.
-    """
-    def __init__(self, path='queue.db'):
-        self.path = path
-        self.conn__ = dict()
-        self.__create_squema__()
-        self.ignored__ = dict()
-
-    def close(self):
-        """Clear the processed event and close connections with database"""
-        self.clean()
-
-        for conn in self.conn__.values():
-            try:
-                conn.commit()
-                conn.close()
-            except sqlite3.ProgrammingError:
-                pass
-
-    def clean(self):
-        "Clean the processed event queue"
-        self.conn.execute("""
-                DELETE FROM events
-                WHERE countdown <= 0
-                """)
-
-    @property
-    def conn(self):
-        "Connection Factory per thread"
-        tid = threading._get_ident()
-
-        conn = self.conn__.get(tid)
-        if conn is None:
-            self.conn__[tid] = conn = sqlite3.connect(self.path)
-        return conn
-
-    def push(self, event):
-        """Push an event in the queue for procesing.
-        Check is a similar event has been placed to block an incoming event
-        and ignore duplicated events due for example by two faster
-        modifications.
-        """
-        ignored = self.ignored__.pop(event_key(event), None)
-        if ignored:
-            if event.date - ignored.date < 2:
-                return
-
-        cursor = self.conn.cursor()
-
-        cursor.execute("""
-        SELECT * FROM events
-        WHERE path = ? AND event = ? AND folder = ? AND countdown > 0
-        """, [event.path, event.event, event.folder])
-
-        row = cursor.fetchone()
-        if row:
-            # print "Ingoring Duplicate event: %s" % (event, )
-            pass
-        else:
-            cursor.execute(
-                "REPLACE INTO events VALUES (?, ?, ?, ?, ?, ?, ?)", event
-            )
-            self.conn.commit()
-
-    def pop(self):
-        """Pop an event from the queue."""
-        cursor = self.conn.cursor()
-        now = time.time()
-        cursor.execute("""
-        SELECT * FROM events
-        WHERE date < ? AND countdown > 0
-        ORDER BY date ASC LIMIT 1""", (now, ))
-        raw = cursor.fetchone()
-        if raw:
-            event = Event(*raw)
-            return event
-
-    def restart(self, event):
-        """Reschedule an event for procesing.
-        Usually this events are failed events that are retry later until
-        countdown is reached.
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-                UPDATE events SET date = ?, countdown = ?
-                WHERE path = ? AND event = ? AND folder = ?
-                """, [event.date + event.restart, event.countdown - 1,
-                      event.path, event.event, event.folder])
-
-        self.conn.commit()
-
-    def finish(self, event):
-        "Mark an event as finished."
-        cursor = self.conn.cursor()
-        cursor.execute("""
-                UPDATE events SET countdown = 0
-                WHERE path = ? AND event = ? AND folder = ?
-                """, [event.path, event.event, event.folder])
-
-        self.conn.commit()
-
-    def ignore(self, event):
-        "Ignore the next event of this type fror a short time"
-
-        self.ignored__[event_key(event)] = event
-
-    def get_last_event(self, since=None):
-        """Get the older event in queue"""
-        cursor = self.conn.cursor()
-        since = since or time.time()
-        cursor.execute("""
-        SELECT * FROM events
-        WHERE date < ? AND countdown <= 0
-        ORDER BY date DESC LIMIT 1""", (since, ))
-        raw = cursor.fetchone()
-        if raw:
-            event = Event(*raw)
-            return event
-
-    def __create_squema__(self):
-        scheme = ["""CREATE TABLE IF NOT EXISTS events
-     (date integer, path text, event text, folder integer,
-     countdown integer, restart integer,
-     path2 text,
-     PRIMARY KEY (path, event, folder)
-     )"""]
-
-        conn = self.conn
-
-        for query in scheme:
-            try:
-                conn.execute(query)
-            except sqlite3.OperationalError, why:
-                print why
-
-        conn.commit()
-
-
-
-
 class Flow(Persistent):
     """This class implements the core for event flows and processing.
 
@@ -339,7 +181,7 @@ class Flow(Persistent):
         self.handlers = list()
 
         self.eventpolling = 0.2
-        self.idlecycles = 200
+        self.idlecycles = 400
         self.configfile = ''
         # self.paths = list()
         self._idle_running_klasses = dict()
@@ -491,7 +333,6 @@ class Flow(Persistent):
             handler = klass(*init_args)
             self.add(handler)
 
-
     def dispatch(self, event):
         key = event_key(event)
         if self.ignored__.pop(key, None):
@@ -503,29 +344,6 @@ class Flow(Persistent):
     def ignore(self, event):
         key = event_key(event)
         self.ignored__[key] = event
-
-# class EventMonitor(FileSystemEventHandler):
-    # """Logs all the events captured."""
-
-    # def __init__(self, flow):
-        # self.flow = flow
-
-    # def on_any_event(self, event):
-        # now = time.time()
-        # if isinstance(event, FileSystemMovedEvent):
-            # ev, path2, path, folder = event.key
-        # else:
-            # ev, path, folder = event.key
-            # path2 = ''
-
-        # # ev = self.tran[ev]
-        # path = os.path.abspath(path)
-        # ev = Event(now, path, ev, folder, 5, 10, path2)
-        # flow.queue.push(ev)
-        # # for handler in self.flow.handlers:
-            # # if ev.path.startswith(handler.path):
-                # # if handler.match(ev):
-                    # # flow.queue.push(ev)
 
 
 class EventHandler(Persistent):
@@ -548,7 +366,6 @@ class EventHandler(Persistent):
         self.regexp = re.compile(self.patterns, re.DOTALL)
 
         self._idle_thread = None
-
 
     def match(self, event):
         "Determine if we can handle this event"
@@ -723,15 +540,6 @@ class PelicanHandler(EventHandler):
 
         The event is passed as a reference.
         """
-
-        # Pelican delete all content, preserving the folder 'output'
-        # so this code is not necessary
-        # if False and self.clear_output:
-            # output = os.path.join(self.project_root, 'output')
-            # for filename in fileiter(output, r'.*\.(css|html|js|jpg|png|gif|svg|ico|json)$'):
-                # print "Removing:", filename
-                # os.unlink(filename)
-
         args = ['pelican']
         proc = subprocess.Popen(args, cwd=self.project_root)
 
@@ -946,6 +754,7 @@ def fileiter(path, regexp=None):
             elif regexp.match(filename):
                 yield filename
 
+
 def folderiter(path, regexp=None):
     if isinstance(regexp, types.StringTypes):
         regexp = re.compile(regexp, re.DOTALL | re.VERBOSE)
@@ -957,7 +766,6 @@ def folderiter(path, regexp=None):
                 yield filename
             elif regexp.match(filename):
                 yield filename
-
 
 
 def get_modified(path, since=0, regexp=None):
@@ -991,7 +799,7 @@ def collect_info(filename):
     tasks = list()
 
     re_task = re.compile(
-        r'(?P<priority>-|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
+        r'(?P<priority>-|+|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
 
     f = codecs.open(filename, 'r', 'utf-8')
     for line in f.readlines():
@@ -1157,13 +965,14 @@ class BackupHandler(EventHandler):
     def on_idle(self):
         "Performs syncing tasks"
 
-        print("Idle on Backup: %s" % self.path)
-
         # allow to inspect the remote site from time to time
         self._reset_remote_checking -= 1
         if self._reset_remote_checking < 0:
             self._reset_remote_checking = 50
             self.last_backup.clear()
+
+        print("Idle on Backup: %s (reset in %s cycles)" %
+              (self.path, self._reset_remote_checking))
 
         # check each repository for backing up
         for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
@@ -1171,8 +980,8 @@ class BackupHandler(EventHandler):
                 self.create_backup(repo)  # for debugging
                 self.rotate_files(repo)
         else:
-            print("Backup: no commit from last time ...")
-
+            print("Backup: no commit from last time (reset in %s cycles)" %
+                  self._reset_remote_checking)
 
     def must_update_git(self, path):
         """Check that there are new commits in git and
@@ -1192,14 +1001,12 @@ class BackupHandler(EventHandler):
             if returncode == 203:  # Couldn't find
                 assert "Couldn't find" in output
                 return True
-
-        # self.last_backup[path] = timestamp
+            else:
+                self.last_backup[path] = timestamp
         return False
 
     def get_git_timestamp(self, path):
         p = subprocess.Popen(
-            # ["git", "rev-list" "--format=format:'%ai'",
-             # "--max-count=1", "`git rev-parse HEAD`"],
             ["git rev-list `git rev-parse HEAD` --max-count=1 --format='%ai'"],
             cwd=path,
             shell=True,
@@ -1209,7 +1016,8 @@ class BackupHandler(EventHandler):
         out, err = p.communicate()
 
         # '2017-07-12 08:46:33'
-        timestamp = re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}', out).group(0)
+        timestamp = re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}',
+                              out).group(0)
         timestamp = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         timestamp = time.mktime(timestamp.timetuple())
 
@@ -1234,7 +1042,6 @@ class BackupHandler(EventHandler):
         # make a backup 30 min later than user has modified any file
         delay = 1800
         return time.time() - self.last_working[path] > delay
-
 
     def create_backup(self, path):
         "Create a New backup for the supervided path"
@@ -1299,7 +1106,6 @@ class BackupHandler(EventHandler):
             for survival in set(final.values()):
                 bak.execute('rm', survival)
 
-
         bak.stop_daemon()
 
 
@@ -1343,6 +1149,7 @@ def get_git_backup_info(path):
     )
     return info
 
+
 # register this module Handlers
 register_handler(PelicanHandler)
 register_handler(SyncHandler)
@@ -1363,4 +1170,5 @@ if __name__ == "__main__":
     flow = Flow()
     flow.config()
 
+    os.nice(20)  # unlx only
     flow.run()
