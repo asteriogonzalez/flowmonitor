@@ -263,10 +263,12 @@ class Flow(Persistent):
                 self._idle_queue.append(handler)
 
         for handler in list(self._idle_queue):
+            now = time.time()
             klass = handler.__class__
             running = self._idle_running_klasses.get(klass)
             if running:
                 if running._idle_thread:
+                    running._idle_last_exec = now
                     if running._idle_thread.isAlive():
                         continue
                     else:
@@ -278,6 +280,7 @@ class Flow(Persistent):
             if not running:
                 handler._idle_thread = threading.Thread(target=handler.on_idle)
                 handler._idle_thread.start()
+                handler._idle_last_exec = now
                 self._idle_running_klasses[klass] = handler
                 self._idle_queue.remove(handler)
                 time.sleep(1)
@@ -385,6 +388,7 @@ class EventHandler(Persistent):
 
         self.path = os.path.abspath(path)
         self._idle_thread = None
+        self._idle_last_exec = 0
 
         for where in [INCLUDE, EXCLUDE]:
             self._patterns[where] = re.compile(MATCH_NONE, re.I | re.DOTALL)
@@ -523,7 +527,7 @@ class PelicanHandler(EventHandler):
 
     def on_deleted(self, event):
         "Fired when a file is deleted"
-        self.make(event)
+        self.make()
 
     def update_file(self, event, lines):
         """Update headers and variables of each file line"""
@@ -535,7 +539,7 @@ class PelicanHandler(EventHandler):
                 contents = self.update_contents(event, template)
 
         self.write_file(event, contents)
-        self.make(event)
+        self.make()
 
     def update_contents(self, event, lines):
         """Update headers and variables of each file line"""
@@ -620,17 +624,23 @@ class PelicanHandler(EventHandler):
 
         return lines
 
-    def make(self, event):
+    def make(self):
         """Update the output contents for pelican.
 
         The event is passed as a reference.
         """
+        self._idle_last_exec = time.time()
+
         args = ['pelican']
         proc = subprocess.Popen(args, cwd=self.project_root)
 
         proc.wait()
         return proc.returncode
 
+    def on_idle(self):
+        "Performs syncing tasks"
+        if time.time() - self._idle_last_exec > 240:
+            self.make()
 
 
 
@@ -649,10 +659,9 @@ class SyncHandler(EventHandler):
     that any file matching any of them, will be synchronized.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, remotes):
         # TODO: better parsing arguments from command line
         EventHandler.__init__(self, path)
-        remotes = '/tmp/remote'
 
         delete_missing = False
 
@@ -661,10 +670,7 @@ class SyncHandler(EventHandler):
         # self.location = split_liststr(location)
         self.delete_missing = delete_missing
 
-        self.run_once = True
-
-    # def add_rule(self, regexp):
-        # self.rules.append(regexp)
+        self._run_once = False
         # self._rules.append(re.compile(regexp))
 
     def on_created(self, event):
@@ -689,10 +695,10 @@ class SyncHandler(EventHandler):
         # p = Process(target=self.sync)
         # p.start()
         # p.join()
-        if not self.run_once:
+        if not self._run_once:
             print "Run Once on syncing"
             self.sync()  # for debugging
-            self.run_once = True
+            self._run_once = True
 
     def sync(self):
         """Sync files that match criteria and remove any remote
@@ -704,9 +710,11 @@ class SyncHandler(EventHandler):
                 filename = os.path.join(root, name)
                 if self._match(filename):
                     event = Event('modified', filename, 0)
-                else:
-                    event = Event('deleted', filename, 0)
-                self.process(event)
+                    self.process(event)
+                #else:
+                # delete all files
+                    # event = Event('deleted', filename, 0)
+
 
         # sync files that must be deleted
         if self.delete_missing:
@@ -714,7 +722,8 @@ class SyncHandler(EventHandler):
 
     def sync_one_file(self, filename):
         """Try to sync a file into all remote folders."""
-        relative_path = filename.split(os.path.dirname(self.path))[-1]
+        # relative_path = filename.split(os.path.dirname(self.path))[-1]
+        relative_path = filename.split(self.path)[-1]
         for remote in self.remotes:
             target = remote + relative_path
             parent = os.path.dirname(target)
@@ -729,21 +738,23 @@ class SyncHandler(EventHandler):
                 with file(target, 'wb') as f_out:
                     f_out.write(f_in.read())
 
-    def _delete_missing(self, remote):
+    def _delete_missing(self):
         """Delete remote files thar are not present in source folder"""
         for remote in self.remotes:
+            # remote = os.path.join(remote, os.path.basename(self.path))
             for root, folders, files in os.walk(remote):
                 for name in files:
-                    filename = os.path.join(root, filename)
+                    filename = os.path.join(root, name)
                     relative_path =  filename.split(remote)[-1]
                     source = self.path + relative_path
                     if not os.path.exists(source):
-                        self.delete_one_file(filename)
+                        os.unlink(filename)
 
     def delete_one_file(self, filename):
         """Check for local file deletion based on remote file path
         that match criteria."""
-        relative_path =  filename.split(self.path)[-1]
+        # relative_path = filename.split(os.path.dirname(self.path))[-1]
+        relative_path = filename.split(self.path)[-1]
         for remote in self.remotes:
             target = remote + relative_path
             if os.path.exists(target):
@@ -768,11 +779,10 @@ class BlogSyncHandler(SyncHandler):
     that any file matching any of them, will be synchronized.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, remotes):
         # TODO: better parsing arguments from command line
 
-        SyncHandler.__init__(self, path)
-        remotes = '/tmp/remote'
+        SyncHandler.__init__(self, path, remotes)
 
         self.add_rule(INCLUDE, r'.*\.svg$')
         self.add_rule(INCLUDE, r'.*\.py$')
