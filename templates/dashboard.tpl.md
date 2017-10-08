@@ -19,12 +19,25 @@ Priority Tasks
 {% endfor %}
 {% endfor %}
 
+
+Ready to do Tasks
+==================================
+
+{% for status, priority_tasks in all_tasks.group_by('priority', ['+'],
+    once=True, exact=True, notmaching=False, skip_empty=False).items() -%}
+
+{% for task in priority_tasks -%}
+{{task.priority }} [{{task.done }}]: [{{task.text }}]({{task.url -}})
+{% endfor %}
+{% endfor %}
+
+
 ----
 
 {% for status, done_tasks in all_tasks.group_by('done', [' '],
     once=True, exact=True, notmaching=True, skip_empty=False).items() -%}
 
-{{translate_done(status)}} Tasks
+{{translate_done(status)}} Tasks by Tags
 ==================================
 
 {% for tag, tasks in done_tasks.group_by('tags', all_tags, once=False).items() %}

@@ -34,8 +34,9 @@ import time
 import types
 from urllib import quote
 import yaml
+import traceback
 
-from watcher import Watcher, event_key
+from watcher import Watcher, event_key, Event
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
@@ -114,6 +115,11 @@ def are_equals(source, target):
     """
     Asume both files exists
     """
+    if not os.path.exists(source):
+        return False
+    if not os.path.exists(target):
+        return False
+
     info_source = os.stat(source)
     info_target = os.stat(target)
 
@@ -226,8 +232,7 @@ class Flow(Persistent):
         """Add a handler that manage some events under a directory.
         """
 
-        self.watcher.add_watcher(handler.path, handler.patterns)
-
+        self.watcher.add_watcher(handler.path, handler.inc_pat, handler.exc_pat)
         self.handlers.append(handler)
         handler.flow = self
         loginfo('Add handler: %s on %s' % (handler.__class__.__name__,
@@ -239,13 +244,13 @@ class Flow(Persistent):
             pass
         else:
             event = self.queue.popleft()
-            try:
-                for handler in self.handlers:
-                    if event.path.startswith(handler.path) and \
-                       handler.match(event):
-                        handler.process(event)
-            except Exception, why:
-                logwarning(why)
+            for handler in self.handlers:
+                try:
+                    handler.dispatch(event)
+                except Exception, why:
+                    print(handler)
+                    traceback.print_exc()
+                    logwarning(why)
 
     def idle(self):
         "Performs tasks that suit in idle loops from time to time"
@@ -303,7 +308,14 @@ class Flow(Persistent):
             if cfg:
                 for klass, state in cfg.pop('handlers'):
                     print klass, state
-                    instance = handlers[klass](**state)
+                    # create a instance with available params from __init__
+                    func = handlers[klass].__init__.im_func.func_code
+                    names = func.co_varnames[1:func.co_argcount]
+                    args = dict([(k, state[k]) for k in names])
+                    instance = handlers[klass](**args)
+
+                    # and set the full state
+                    instance.__setstate__(state)
                     self.add(instance)
 
                 self.__setstate__(cfg)
@@ -346,9 +358,15 @@ class Flow(Persistent):
         self.ignored__[key] = event
 
 
+MATCH_ALL = r'.*'
+MATCH_NONE = r'(?!x)x'
+SKIP_CONTENT = None
+INCLUDE = 'include'
+EXCLUDE = 'exclude'
+
 class EventHandler(Persistent):
     "Base class for all EventHandlers"
-    def __init__(self, path, extensions):
+    def __init__(self, path):
         """Base class for any event handler.
 
         Args:
@@ -358,22 +376,88 @@ class EventHandler(Persistent):
         if not os.path.exists(path):
             raise OSError("%s path does not exits" % path)
 
+        self.rules = dict()
+        self.rules[INCLUDE] = dict()
+        self.rules[EXCLUDE] = dict()
+        self._patterns = dict()
+
         self.flow = None
 
         self.path = os.path.abspath(path)
-        self.extensions = split_liststr(extensions)
-        self.patterns = r'|'.join([r'.*\%s$' % ext for ext in self.extensions])
-        self.regexp = re.compile(self.patterns, re.DOTALL)
-
         self._idle_thread = None
+
+        for where in [INCLUDE, EXCLUDE]:
+            self._patterns[where] = re.compile(MATCH_NONE, re.I | re.DOTALL)
+
+        # self.patterns_inc = r'|'.join(self.include)
+        # self.patterns_exc = r'|'.join(self.exclude)
+        # self.regexp_inc = re.compile(self.patterns_inc, re.DOTALL)
+        # self.regexp_exc = re.compile(self.patterns_exc, re.DOTALL)
+
+    def add_rule(self, where, name_pat, content_pat=SKIP_CONTENT):
+        rules = self.rules[where]
+        patterns = rules.setdefault(name_pat, set([]))
+        patterns.add(content_pat)
+        self._patterns[where] = re.compile(r'|'.join(rules), re.I | re.DOTALL)
+
+    @property
+    def inc_pat(self):
+        return r'|'.join(self.rules[INCLUDE]) or MATCH_NONE
+
+    @property
+    def exc_pat(self):
+        return r'|'.join(self.rules[EXCLUDE]) or MATCH_NONE
+
+
+    def dispatch(self, event):
+        if self.match(event):
+            self.process(event)
 
     def match(self, event):
         "Determine if we can handle this event"
-        return not self.extensions or self.regexp.match(event.path)
+        return self._match(event.path)
 
     def _match(self, filename):
-        ext = os.path.splitext(filename)[-1]
-        return ext in self.extensions
+        if not filename.startswith(self.path):
+            return False
+
+        return self._patterns[INCLUDE].search(filename) and \
+               not self._patterns[EXCLUDE].search(filename)
+
+    def _match_content(self, filename):
+
+        match = False
+        for name_pat, content_pat in self.rules[INCLUDE].items():
+            if re.search(name_pat, filename):
+                if self.__match_content(filename, content_pat):
+                    match = True
+                    break
+
+        for name_pat, content_pat in self.rules[EXCLUDE].items():
+            if re.search(name_pat, filename):
+                if self.__match_content(filename, content_pat):
+                    match = False
+                    break
+
+        return match
+
+    def __match_content(self, filename, content_pat):
+        """Analize file content that match any of the given rules."""
+        if SKIP_CONTENT in content_pat:
+            return True
+
+        if not os.path.exists(filename):
+            return False
+
+        regexp = re.compile(r'|'.join(content_pat), re.DOTALL | re.I)
+
+        with file(filename, 'rt') as f:
+            for line in f.readlines():
+                m = regexp.match(line)
+                if m:
+                    return m
+
+        return False
 
     def process(self, event):
         """Search for a `on_xxxx` method that will handle the event
@@ -382,7 +466,7 @@ class EventHandler(Persistent):
         func_name = 'on_%s' % event.event
         func = getattr(self, func_name, None)
         if func:
-            func(event)
+            return func(event)
 
     def make(self, event):
         """Execute a external process that 'makes' the goal
@@ -413,14 +497,15 @@ class PelicanHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        extensions = ['.md', '.py']
         if os.path.split(path)[-1] != 'content':
             path = os.path.join(path, 'content')
 
-        EventHandler.__init__(self, path, extensions)
+        EventHandler.__init__(self, path)
 
         self.project_root = os.path.split(self.path)[0]
         # self.clear_output = True
+        self.add_rule(INCLUDE, r'.*\.py$')
+        self.add_rule(INCLUDE, r'.*\.md$')
 
     def on_created(self, event):
         "Fired when a new file is created"
@@ -547,6 +632,8 @@ class PelicanHandler(EventHandler):
         return proc.returncode
 
 
+
+
 class SyncHandler(EventHandler):
     """This class manage two or more trees to propagate changes
     across them.
@@ -564,31 +651,48 @@ class SyncHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        extensions = '.md'
+        EventHandler.__init__(self, path)
         remotes = '/tmp/remote'
-        rules = r'Tags:\s*.*\W+(foo)\W+.*'
-        location = 'ai'
+
         delete_missing = False
 
-        # EventHandler.__init__(self, path, extensions)
-        EventHandler.__init__(self, path)
-        self.rules = split_liststr(rules)
+        # self.rules = split_liststr(rules)
         self.remotes = split_liststr(remotes)
-        self.location = split_liststr(location)
+        # self.location = split_liststr(location)
         self.delete_missing = delete_missing
+
+        self.run_once = True
 
     # def add_rule(self, regexp):
         # self.rules.append(regexp)
         # self._rules.append(re.compile(regexp))
 
+    def on_created(self, event):
+        "Fired when a new file is created"
+        return self.on_modified(event)
+
+    def on_modified(self, event):
+        "Fired when a file is modified somehow"
+        if bool(self._match(event.path)) ^ \
+           bool(self._match_content(event.path)):
+            self.delete_one_file(event.path)
+        else:
+            self.sync_one_file(event.path)
+
+    def on_deleted(self, event):
+        "Fired when a file is deleted"
+        # check self.delete_missing
+        self.delete_one_file(event.path)
+
     def on_idle(self):
         "Performs syncing tasks"
-
-        print "Idle on syncing"
         # p = Process(target=self.sync)
         # p.start()
         # p.join()
-        self.sync()  # for debugging
+        if not self.run_once:
+            print "Run Once on syncing"
+            self.sync()  # for debugging
+            self.run_once = True
 
     def sync(self):
         """Sync files that match criteria and remove any remote
@@ -599,69 +703,84 @@ class SyncHandler(EventHandler):
             for name in files:
                 filename = os.path.join(root, name)
                 if self._match(filename):
-                    if self.match_content(filename):
-                        self.sync_one_file(filename)
+                    event = Event('modified', filename, 0)
+                else:
+                    event = Event('deleted', filename, 0)
+                self.process(event)
 
         # sync files that must be deleted
-        for remote in self.remotes:
-            self.delete_not_matched(remote)
-
-    def match_content(self, filename):
-        """Analize file content that match any of the given rules."""
-        intersection = set(self.location).intersection(
-            split_string(os.path.dirname(filename)))
-        if intersection:
-            return intersection
-
-        if not os.path.exists(filename):
-            return
-
-        with file(filename, 'rt') as f:
-            for line in f.readlines():
-                for regexp in self.rules:
-                    m = re.match(regexp, line)
-                    if m:
-                        return m
+        if self.delete_missing:
+            self._delete_missing()
 
     def sync_one_file(self, filename):
         """Try to sync a file into all remote folders."""
-        relative_path = filename.split(self.path)[-1]
+        relative_path = filename.split(os.path.dirname(self.path))[-1]
         for remote in self.remotes:
             target = remote + relative_path
             parent = os.path.dirname(target)
             if not os.path.exists(parent):
                 os.makedirs(parent)
 
-            if os.path.exists(target) and \
-               are_equals(filename, target):
+            if are_equals(filename, target):
                 continue
 
             loginfo('Sync %s -> %s' % (filename, target))
-            with file(filename, 'r') as f_in:
-                with file(target, 'w') as f_out:
+            with file(filename, 'rb') as f_in:
+                with file(target, 'wb') as f_out:
                     f_out.write(f_in.read())
 
-    def delete_not_matched(self, remote):
-        """Explore remote folder for files that match criteria"""
-        for root, folders, files in os.walk(remote):
-            for name in files:
-                filename = os.path.join(root, name)
-                if self._match(filename):
-                    self.delete_one_file(remote, filename)
+    def _delete_missing(self, remote):
+        """Delete remote files thar are not present in source folder"""
+        for remote in self.remotes:
+            for root, folders, files in os.walk(remote):
+                for name in files:
+                    filename = os.path.join(root, filename)
+                    relative_path =  filename.split(remote)[-1]
+                    source = self.path + relative_path
+                    if not os.path.exists(source):
+                        self.delete_one_file(filename)
 
-    def delete_one_file(self, remote, filename):
+    def delete_one_file(self, filename):
         """Check for local file deletion based on remote file path
         that match criteria."""
-        relative_path = filename.split(remote)[-1]
-        source = self.path + relative_path
+        relative_path =  filename.split(self.path)[-1]
+        for remote in self.remotes:
+            target = remote + relative_path
+            if os.path.exists(target):
+                os.unlink(target)
+            dirname = os.path.dirname(target)
+            if os.path.exists(dirname) and not os.listdir(dirname):
+                os.rmdir(dirname)
 
-        if self.delete_missing and \
-           not os.path.exists(source):
-            os.unlink(filename)
-            return
 
-        if not self.match_content(source):
-            os.unlink(filename)
+class BlogSyncHandler(SyncHandler):
+    """This class manage two or more trees to propagate changes
+    across them.
+
+    There have two methods:
+
+    - Fast: uses the database queue to select only then know archives
+            but may lack some files if flow was down when changes happened.
+
+    - Deep: explore all file system tree
+
+    The matching rules can be describe as a sequences of regular expressions
+    that any file matching any of them, will be synchronized.
+    """
+
+    def __init__(self, path):
+        # TODO: better parsing arguments from command line
+
+        SyncHandler.__init__(self, path)
+        remotes = '/tmp/remote'
+
+        self.add_rule(INCLUDE, r'.*\.svg$')
+        self.add_rule(INCLUDE, r'.*\.py$')
+        self.add_rule(INCLUDE, r'.*\.md$', r'Tags:\s*.*\W+(foo)\W+.*')
+
+        self.add_rule(EXCLUDE, r'.*\.css$')  # an example :)
+
+        delete_missing = False
 
 
 class PyTestHandler(EventHandler):
@@ -679,8 +798,7 @@ class DashboardHandler(EventHandler):
     """
     def __init__(self, path):
         path = os.path.join(path, 'content')
-        extensions = '.md'
-        EventHandler.__init__(self, path, extensions)
+        EventHandler.__init__(self, path)
 
         self.env = Environment(
             loader=PackageLoader('flowmonitor', 'templates'),
@@ -690,6 +808,9 @@ class DashboardHandler(EventHandler):
         self.last_generation = 0
 
         self.dashborad_file = os.path.join(self.path, 'dashboard.md')
+
+        self.add_rule(INCLUDE, r'.*\.md$')
+
 
     def on_idle(self):
         "Performs syncing tasks"
@@ -799,7 +920,7 @@ def collect_info(filename):
     tasks = list()
 
     re_task = re.compile(
-        r'(?P<priority>-|+|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
+        r'(?P<priority>-|\+|\*)\s+\[(?P<done>.)\]\s+(?P<line>.*)$')
 
     f = codecs.open(filename, 'r', 'utf-8')
     for line in f.readlines():
@@ -940,7 +1061,7 @@ def print_groups(groups):
 
 def translate_done(status):
     "Translate task 'done' attribute to a human readable way"
-    keys = {' ': 'Next', None: 'Done', }
+    keys = {' ': 'Waiting', None: 'Done', }
     return keys.get(status, '??')
 
 
@@ -950,8 +1071,7 @@ class BackupHandler(EventHandler):
     """
     def __init__(self, path):
         # path = os.path.join(path, '.git')
-        extensions = '.md'
-        EventHandler.__init__(self, path, extensions)
+        EventHandler.__init__(self, path)
 
         self.temp = '/tmp'
         self.remote_folder = '/backup'
@@ -1153,9 +1273,9 @@ def get_git_backup_info(path):
 # register this module Handlers
 register_handler(PelicanHandler)
 register_handler(SyncHandler)
+register_handler(BlogSyncHandler)
 register_handler(PyTestHandler)
 register_handler(DashboardHandler)
-
 register_handler(BackupHandler)
 
 if __name__ == "__main__":

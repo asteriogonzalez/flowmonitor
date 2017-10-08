@@ -111,7 +111,7 @@ class MegaBackup(object):
     MEGA commands to upload and manage the remote files.
     """
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
-    compress_cmd = ['nice', '7z', 'a', '-phello', '-mhe', '-mx1', '-mmt']
+    compress_cmd = ['nice', '7z', 'a', '-phello', '-mhe', '-mx9', '-mmt']
 
     def __init__(self, credentials=None):  # TODO: user credentials
         self.credentials = credentials
@@ -294,10 +294,12 @@ def rotatenames(path):
             ''.join([name, '.m%s' % month, ext]),
             ''.join([name, '.y%s' % year, ext]))
 
+
 def clone_list(alist, *args):
     result = list(alist)
     result.extend(args)
     return result
+
 
 if __name__ == '__main__':
 

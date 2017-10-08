@@ -28,8 +28,9 @@ def event_key(event):
 
 class Watcher(Thread):
     def __init__(self, *args, **kw):
-        self.watchers = dict()
         self.unique_paths = []
+        self.inc_pat = dict()
+        self.exc_pat = dict()
         self.favorite_files = OrderedDict()
         self.max_favorites = 100
         self.last_modified = time.time()
@@ -39,19 +40,8 @@ class Watcher(Thread):
         self.soft_idle = 0.1
         Thread.__init__(self, *args, **kw)
 
-    def add_watcher(self, path, pattern='.*'):
+    def add_watcher(self, path, inc_pat, exc_pat):
         path = exppath(path)
-        patterns, fullpatt, compiled = self.watchers.setdefault(
-            path, ['', '', None])
-
-        if patterns:
-            patterns += '|' + pattern
-        else:
-            patterns = pattern
-
-        # regexp = r'%s(%s)' % (path, patterns)
-        regexp = patterns
-        self.watchers[path] = [patterns, regexp, re.compile(regexp, re.DOTALL)]
 
         # add unique paths for searching
         new = False
@@ -64,6 +54,11 @@ class Watcher(Thread):
 
         if new:
             self.unique_paths.append(path)
+
+        self.inc_pat.setdefault(path, set()).add(inc_pat)
+        self.exc_pat.setdefault(path, set()).add(exc_pat)
+
+
 
     def run(self):
         print ">> starting of monitorize ..."
@@ -91,9 +86,9 @@ class Watcher(Thread):
                     event = gen.next()
                     queue.append(gen)
                     if event.path:
-                        if self.add_favorite(event):
-                            yield event
-                            self.last_modified = min(self.last_modified, event.date)
+                        self.update_favorite(event)
+                        yield event
+                        self.last_modified = min(self.last_modified, event.date)
                 except StopIteration:
                     func = getattr(self, gen.gi_code.co_name)
                     queue.append(func())  # restart again
@@ -105,6 +100,21 @@ class Watcher(Thread):
 
     def fileiterator(self):
         """Iterate for """
+        def match(path):
+            if not path.startswith(top):
+                return False
+
+            result = False
+            for pattern in self.inc_pat[top]:
+                if re.match(pattern, path):
+                    result = True
+                    break
+            for pattern in self.exc_pat[top]:
+                if re.match(pattern, path):
+                    result = False
+                    break
+            return result
+
         since = self.last_modified  # make a copy at the begining
         for top in self.unique_paths:
             for root, _, files in os.walk(top):
@@ -115,7 +125,7 @@ class Watcher(Thread):
                         continue
 
                     mtime = os.stat(path).st_mtime
-                    if mtime > since and self.match_watcher(path):
+                    if mtime > since and match(path):
                         yield Event('modified', path, mtime)
                         self.last_modified = max(self.last_modified, mtime)
                 else:
@@ -125,6 +135,8 @@ class Watcher(Thread):
                     yield Event('none', '', 0)
 
         self.relax_search()
+
+
 
     def favoriteiterator(self):
         since = self.last_modified  # make a copy at the begining
@@ -138,7 +150,7 @@ class Watcher(Thread):
                 self.favorite_files.pop(path)
                 yield Event('deleted', path, time.time())
 
-    def add_favorite(self, event):
+    def update_favorite(self, event):
         """Add files for high frequency monitoring that match
         some handler and determine if any handler would attend
         the event.
@@ -151,31 +163,21 @@ class Watcher(Thread):
             self.favorite_files[event.path] = event.date
             return True
 
-        if self.match_watcher(event.path):
-            self.favorite_files[event.path] = event.date
-            self.relax_search()
+        self.favorite_files[event.path] = event.date
+        self.relax_search()
 
-            if len(self.favorite_files) > self.max_favorites:
-                # # remove some the older ones
-                # times = self.favorite_files.values()
-                # times.sort()
-                # older = times[0]  # use 1, 2 if you want to delete more
-                # for key, value in self.favorite_files.items():
-                    # if value <= older:
-                        # self.favorite_files.pop(key)
+        if len(self.favorite_files) > self.max_favorites:
+            # # remove some the older ones
+            # times = self.favorite_files.values()
+            # times.sort()
+            # older = times[0]  # use 1, 2 if you want to delete more
+            # for key, value in self.favorite_files.items():
+                # if value <= older:
+                    # self.favorite_files.pop(key)
 
-                killed = self.favorite_files.keys()[0]
-                self.favorite_files.pop(killed)
+            killed = self.favorite_files.keys()[0]
+            self.favorite_files.pop(killed)
 
-            return True
-        return False
-
-    def match_watcher(self, path):
-        for top, (pattern, _, regexp) in self.watchers.items():
-            if top not in path:
-                continue
-            if regexp.match(path):
-                return top
 
     def relax_search(self):
         idle = self.idle * 1.5
