@@ -1099,7 +1099,7 @@ class BackupHandler(EventHandler):
 
         self._reset_remote_checking = 0
 
-        self.add_rule(INCLUDE, r'\.git/.*')
+        self.add_rule(INCLUDE, r'\.git$')
         self.add_rule(EXCLUDE, r'nonexisting_path_1$')
         self.add_rule(EXCLUDE, r'nonexisting_path_2$')
 
@@ -1118,8 +1118,8 @@ class BackupHandler(EventHandler):
         # check each repository for backing up
         for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
             if self._match(repo):
-                print "BACKUP:\t%s" % repo
                 if self.must_update_git(repo):
+                    print "BACKUP:\t%s" % repo
                     self.create_backup(repo)  # for debugging
                     self.rotate_files(repo)
             else:
@@ -1146,10 +1146,10 @@ class BackupHandler(EventHandler):
 
             if returncode == 203:  # Couldn't find
                 assert "Couldn't find" in output
-                return True
             else:
                 self.last_backup[path] = timestamp
-        return False
+
+        return timestamp > self.last_backup.get(path, 0)
 
     def get_git_timestamp(self, path):
         p = subprocess.Popen(
