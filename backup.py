@@ -48,7 +48,7 @@ $
 
 
 """
-import datetime
+from datetime import datetime, date
 import subprocess
 import os
 import re
@@ -124,7 +124,7 @@ class MegaBackup(object):
 
     @classmethod
     def get_zip_name(cls, basename, today=None):
-        today = today or datetime.date.today()
+        today = today or date.today()
         basename = '%s-%s.git.%s' % (basename, today.toordinal(), cls.zip_extension)
         return basename
 
@@ -300,7 +300,7 @@ class MegaBackup(object):
 def rotatenames(path):
     "Create a set of rotate names from a given path"
     name, ext = os.path.splitext(path)
-    now = datetime.date.today()
+    now = date.today()
     weekday = now.weekday()
     week = now.day // 7
     month = now.month

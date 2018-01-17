@@ -1,6 +1,6 @@
 import os
 import time
-import datetime
+from datetime import datetime
 import re
 from threading import Thread
 from collections import OrderedDict, namedtuple
@@ -8,7 +8,7 @@ from collections import OrderedDict, namedtuple
 
 def print_mdate(path):
     t = os.stat(path).st_mtime
-    s = datetime.datetime.fromtimestamp(int(t)).strftime('%Y-%m-%d %H:%M:%S')
+    s = datetime.fromtimestamp(int(t)).strftime('%Y-%m-%d %H:%M:%S')
     print "%-80s %s" % (path, s)
 
 
@@ -110,11 +110,11 @@ class Watcher(Thread):
 
             result = False
             for pattern in self.inc_pat[top]:
-                if re.match(pattern, path):
+                if re.search(pattern, path):
                     result = True
                     break
             for pattern in self.exc_pat[top]:
-                if re.match(pattern, path):
+                if re.search(pattern, path):
                     result = False
                     break
             return result

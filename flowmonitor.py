@@ -17,7 +17,7 @@ TODO:
 """
 import codecs
 from collections import OrderedDict, deque
-import datetime
+from datetime import datetime, date
 from getpass import getuser
 import hashlib
 import logging
@@ -487,28 +487,29 @@ class PelicanHandler(EventHandler):
 
     def __init__(self, path):
         # TODO: better parsing arguments from command line
-        if os.path.split(path)[-1] != 'content':
-            path = os.path.join(path, 'content')
+        aux = os.path.split(path)
+        if aux[-1] == 'content':
+            path = aux[0]
 
         EventHandler.__init__(self, path)
 
-        self.project_root = os.path.split(self.path)[0]
         # self.clear_output = True
-        self.add_rule(INCLUDE, r'.*\.py$')
-        self.add_rule(INCLUDE, r'.*\.md$')
+        self.add_rule(INCLUDE, r'content/*\.py$')
+        self.add_rule(INCLUDE, r'content/.*\.md$')
 
-        self.add_rule(EXCLUDE, r'output/.*$')  # an example :)
+        self.add_rule(EXCLUDE, r'output/.*$')
 
+        self._content_checked = False
 
     def on_created(self, event):
         "Fired when a new file is created"
         return self.on_modified(event)
 
-    def on_modified(self, event):
+    def on_modified(self, event, write=True):
         "Fired when a file is modified somehow"
         with file(event.path, 'rt') as f:
             lines = f.readlines()
-            self.update_file(event, lines)
+            self.update_file(event, lines, write)
 
     def on_moved(self, event):
         "Fired when a file is renamed of moved"
@@ -518,7 +519,7 @@ class PelicanHandler(EventHandler):
         "Fired when a file is deleted"
         self.make()
 
-    def update_file(self, event, lines):
+    def update_file(self, event, lines, write=True):
         """Update headers and variables of each file line"""
         contents = self.update_contents(event, lines)
         if not contents:
@@ -527,15 +528,17 @@ class PelicanHandler(EventHandler):
                 template.extend(lines)
                 contents = self.update_contents(event, template)
                 print ">> Adding template info for %s" % (event, )
+                write = True
 
-        self.write_file(event, contents)
-        self.make()
+        if write:
+            self.write_file(event, contents)
+            self.make()
 
     def update_contents(self, event, lines):
         """Update headers and variables of each file line"""
         headers = dict()
         t = (event.date // 300) * 300
-        headers['Modified'] = datetime.datetime.fromtimestamp(t) \
+        headers['Modified'] = datetime.fromtimestamp(t) \
             .strftime('%Y-%m-%d %H:%M')
         n = self.update_headers(lines, headers)
 
@@ -600,7 +603,7 @@ class PelicanHandler(EventHandler):
         best_match = 0
         lines = ['this is an empty article!']
 
-        for root, folders, files in os.walk(self.project_root):
+        for root, folders, files in os.walk(self.path):
             if self._re_templates.match(root):
                 for name in files:
                     namelower = name.lower()
@@ -622,7 +625,7 @@ class PelicanHandler(EventHandler):
         self._idle_last_exec = time.time()
 
         args = ['pelican']
-        proc = subprocess.Popen(args, cwd=self.project_root)
+        proc = subprocess.Popen(args, cwd=self.path)
 
         proc.wait()
         return proc.returncode
@@ -631,6 +634,17 @@ class PelicanHandler(EventHandler):
         "Rebuild pelican blog from time to time"
         if time.time() - self._idle_last_exec > 240:
             self.make()
+
+        # check content once in starting
+        if not self._content_checked:
+            for root, _, files in os.walk(self.path):
+                for name in files:
+                    path = os.path.join(root, name)
+                    if path.endswith('.md') and self._match(path):
+                        event = Event('modified', path, 0)
+                        self.on_modified(event, write=False)
+            self._content_checked = True
+
 
 
 
@@ -1085,7 +1099,7 @@ class BackupHandler(EventHandler):
 
         self._reset_remote_checking = 0
 
-        self.add_rule(INCLUDE, r'.')
+        self.add_rule(INCLUDE, r'\.git/.*')
         self.add_rule(EXCLUDE, r'nonexisting_path_1$')
         self.add_rule(EXCLUDE, r'nonexisting_path_2$')
 
@@ -1150,7 +1164,7 @@ class BackupHandler(EventHandler):
         # '2017-07-12 08:46:33'
         timestamp = re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}',
                               out).group(0)
-        timestamp = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         timestamp = time.mktime(timestamp.timetuple())
 
         return timestamp
@@ -1217,7 +1231,7 @@ class BackupHandler(EventHandler):
                 m = regexp.match(name)
                 if m:
                     m = m.groupdict()
-                    date = datetime.date.fromordinal(int(m['ordinal']))
+                    date = date.fromordinal(int(m['ordinal']))
                     names = rotate_names(date, m['reponame'], m['ext'])
                     name = os.path.join(remote_path, name)
                     matched_files.append(name)
