@@ -43,14 +43,18 @@ class Watcher(Thread):
     def add_watcher(self, path, inc_pat, exc_pat):
         path = exppath(path)
 
-        # add unique paths for searching
-        new = False
-        for p in list(self.unique_paths):
-            if path in p:  # subtree
-                self.unique_paths.remove(p)
-                new = True
-        else:
-            new = True
+        # # add unique paths for searching
+        # new = False
+        # for p in list(self.unique_paths):
+            # if path in p:  # subtree
+                # self.unique_paths.remove(p)
+                # new = True
+        # else:
+            # new = True
+
+        new = True
+        if path in self.unique_paths:
+            new = False
 
         if new:
             self.unique_paths.append(path)
@@ -124,10 +128,11 @@ class Watcher(Thread):
                         # let the other generator notifies the changes
                         continue
 
-                    mtime = os.stat(path).st_mtime
-                    if mtime > since and match(path):
-                        yield Event('modified', path, mtime)
-                        self.last_modified = max(self.last_modified, mtime)
+                    if match(path) and os.path.exists(path):
+                        mtime = os.stat(path).st_mtime
+                        if mtime > since:
+                            yield Event('modified', path, mtime)
+                            self.last_modified = max(self.last_modified, mtime)
                 else:
                     # after process a folder, we return control to
                     # collaborate in multitasking
@@ -135,8 +140,6 @@ class Watcher(Thread):
                     yield Event('none', '', 0)
 
         self.relax_search()
-
-
 
     def favoriteiterator(self):
         since = self.last_modified  # make a copy at the begining

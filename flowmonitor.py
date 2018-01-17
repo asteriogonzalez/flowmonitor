@@ -190,8 +190,7 @@ class Flow(Persistent):
         self.idlecycles = 400
         self.configfile = ''
         # self.paths = list()
-        self._idle_running_klasses = dict()
-        self._idle_queue = list()
+
 
     def run(self):
         """Main loop of the process.
@@ -208,6 +207,7 @@ class Flow(Persistent):
         self.save_config()
 
         loginfo('Start flow monitor')
+
         self.watcher.start()
 
         try:
@@ -259,31 +259,16 @@ class Flow(Persistent):
         # if event:
         print "Do something idle ..."
         for handler in self.handlers:
-            if handler not in self._idle_queue:
-                self._idle_queue.append(handler)
+            time.sleep(1)
+            if handler._idle_thread:
+                if handler._idle_thread.isAlive():
+                    continue
+                else:
+                    handler._idle_thread.join()
 
-        for handler in list(self._idle_queue):
-            now = time.time()
-            klass = handler.__class__
-            running = self._idle_running_klasses.get(klass)
-            if running:
-                if running._idle_thread:
-                    running._idle_last_exec = now
-                    if running._idle_thread.isAlive():
-                        continue
-                    else:
-                        running._idle_thread.join()
-                        running._idle_thread = None
-                        self._idle_running_klasses.pop(klass)
-                        running = None
-
-            if not running:
-                handler._idle_thread = threading.Thread(target=handler.on_idle)
-                handler._idle_thread.start()
-                handler._idle_last_exec = now
-                self._idle_running_klasses[klass] = handler
-                self._idle_queue.remove(handler)
-                time.sleep(1)
+            handler._idle_thread = threading.Thread(target=handler.on_idle)
+            handler._idle_thread.start()
+            # handler._idle_last_exec = 0
 
     def save_config(self, configfile=None):
         """Save internal config to a file"""
@@ -382,7 +367,7 @@ class EventHandler(Persistent):
         self.rules = dict()
         self.rules[INCLUDE] = dict()
         self.rules[EXCLUDE] = dict()
-        self._patterns = dict()
+        # self._patterns = dict()
 
         self.flow = None
 
@@ -390,8 +375,8 @@ class EventHandler(Persistent):
         self._idle_thread = None
         self._idle_last_exec = 0
 
-        for where in [INCLUDE, EXCLUDE]:
-            self._patterns[where] = re.compile(MATCH_NONE, re.I | re.DOTALL)
+        # for where in [INCLUDE, EXCLUDE]:
+            # self._patterns[where] = re.compile(MATCH_NONE, re.I | re.DOTALL)
 
         # self.patterns_inc = r'|'.join(self.include)
         # self.patterns_exc = r'|'.join(self.exclude)
@@ -400,9 +385,10 @@ class EventHandler(Persistent):
 
     def add_rule(self, where, name_pat, content_pat=SKIP_CONTENT):
         rules = self.rules[where]
-        patterns = rules.setdefault(name_pat, set([]))
-        patterns.add(content_pat)
-        self._patterns[where] = re.compile(r'|'.join(rules), re.I | re.DOTALL)
+        patterns = rules.setdefault(name_pat, list())
+        if content_pat not in patterns:
+            patterns.append(content_pat)
+        # self._patterns[where] = re.compile(r'|'.join(rules), re.I | re.DOTALL)
 
     @property
     def inc_pat(self):
@@ -411,7 +397,6 @@ class EventHandler(Persistent):
     @property
     def exc_pat(self):
         return r'|'.join(self.rules[EXCLUDE]) or MATCH_NONE
-
 
     def dispatch(self, event):
         if self.match(event):
@@ -425,35 +410,36 @@ class EventHandler(Persistent):
         if not filename.startswith(self.path):
             return False
 
-        return self._patterns[INCLUDE].search(filename) and \
-               not self._patterns[EXCLUDE].search(filename)
+        return self._match_content(filename)
+
+        # return self._patterns[INCLUDE].search(filename) and \
+               # not self._patterns[EXCLUDE].search(filename)
 
     def _match_content(self, filename):
-
         match = False
-        for name_pat, content_pat in self.rules[INCLUDE].items():
+        for name_pat, content_patterns in self.rules[INCLUDE].items():
             if re.search(name_pat, filename):
-                if self.__match_content(filename, content_pat):
+                if self.__match_content(filename, content_patterns):
                     match = True
                     break
 
-        for name_pat, content_pat in self.rules[EXCLUDE].items():
+        for name_pat, content_patterns in self.rules[EXCLUDE].items():
             if re.search(name_pat, filename):
-                if self.__match_content(filename, content_pat):
+                if self.__match_content(filename, content_patterns):
                     match = False
                     break
 
         return match
 
-    def __match_content(self, filename, content_pat):
+    def __match_content(self, filename, content_patterns):
         """Analize file content that match any of the given rules."""
-        if SKIP_CONTENT in content_pat:
+        if SKIP_CONTENT in content_patterns:
             return True
 
         if not os.path.exists(filename):
             return False
 
-        regexp = re.compile(r'|'.join(content_pat), re.DOTALL | re.I)
+        regexp = re.compile(r'|'.join(content_patterns), re.DOTALL | re.I)
 
         with file(filename, 'rt') as f:
             for line in f.readlines():
@@ -511,6 +497,9 @@ class PelicanHandler(EventHandler):
         self.add_rule(INCLUDE, r'.*\.py$')
         self.add_rule(INCLUDE, r'.*\.md$')
 
+        self.add_rule(EXCLUDE, r'output/.*$')  # an example :)
+
+
     def on_created(self, event):
         "Fired when a new file is created"
         return self.on_modified(event)
@@ -537,6 +526,7 @@ class PelicanHandler(EventHandler):
             if template:
                 template.extend(lines)
                 contents = self.update_contents(event, template)
+                print ">> Adding template info for %s" % (event, )
 
         self.write_file(event, contents)
         self.make()
@@ -638,7 +628,7 @@ class PelicanHandler(EventHandler):
         return proc.returncode
 
     def on_idle(self):
-        "Performs syncing tasks"
+        "Rebuild pelican blog from time to time"
         if time.time() - self._idle_last_exec > 240:
             self.make()
 
@@ -695,7 +685,7 @@ class SyncHandler(EventHandler):
         # p = Process(target=self.sync)
         # p.start()
         # p.join()
-        if not self._run_once:
+        if True or not self._run_once:  # TODO: review why some chanes aren't noticed
             print "Run Once on syncing"
             self.sync()  # for debugging
             self._run_once = True
@@ -786,7 +776,8 @@ class BlogSyncHandler(SyncHandler):
 
         self.add_rule(INCLUDE, r'.*\.svg$')
         self.add_rule(INCLUDE, r'.*\.py$')
-        self.add_rule(INCLUDE, r'.*\.md$', r'Tags:\s*.*\W+(foo)\W+.*')
+        self.add_rule(INCLUDE, r'.*\.md$', r'Tags:\s*.*\W+(test)\W+.*')
+        self.add_rule(INCLUDE, r'.*\.md$', r'Series:\s*.*\W+(vega)\W+.*')
 
         self.add_rule(EXCLUDE, r'.*\.css$')  # an example :)
 
@@ -807,7 +798,9 @@ class DashboardHandler(EventHandler):
     """A simple Handler that regenerate a Task Dashboard.
     """
     def __init__(self, path):
-        path = os.path.join(path, 'content')
+        if os.path.split(path)[-1] != 'content':
+            path = os.path.join(path, 'content')
+
         EventHandler.__init__(self, path)
 
         self.env = Environment(
@@ -1092,6 +1085,10 @@ class BackupHandler(EventHandler):
 
         self._reset_remote_checking = 0
 
+        self.add_rule(INCLUDE, r'.')
+        self.add_rule(EXCLUDE, r'nonexisting_path_1$')
+        self.add_rule(EXCLUDE, r'nonexisting_path_2$')
+
     def on_idle(self):
         "Performs syncing tasks"
 
@@ -1106,9 +1103,14 @@ class BackupHandler(EventHandler):
 
         # check each repository for backing up
         for repo in folderiter(self.path, regexp=r'.*(\.git)$'):
-            if self.must_update_git(repo):
-                self.create_backup(repo)  # for debugging
-                self.rotate_files(repo)
+            if self._match(repo):
+                print "BACKUP:\t%s" % repo
+                if self.must_update_git(repo):
+                    self.create_backup(repo)  # for debugging
+                    self.rotate_files(repo)
+            else:
+                print "SKIP:\t%s" % repo
+                foo = 1
         else:
             print("Backup: no commit from last time (reset in %s cycles)" %
                   self._reset_remote_checking)
@@ -1254,9 +1256,11 @@ def rotate_names(date, name, ext):
             ''.join([name, '.m%s' % month, ext]),
             ''.join([name, '.y%s' % year, ext]))
 
+def get_base_name(basename, today):
+    pass
 
 def get_git_backup_info(path):
-    "Returns many info about git back based on repository path"
+    "Returns some info about git backup based on repository path"
     if path.endswith('.git'):
         git_path = path
         parent = os.path.join(*os.path.split(path)[:-1])
@@ -1265,8 +1269,7 @@ def get_git_backup_info(path):
         git_path = os.path.join(path, '.git')
         basename = os.path.basename(path)
 
-    today = datetime.date.today()
-    basename = '%s-%s.git.7z' % (basename, today.toordinal())
+    basename = backup.MegaBackup.get_zip_name(basename)
     reponame = os.path.basename(parent)
     remotename = os.path.join(reponame, basename)
 
@@ -1289,6 +1292,8 @@ register_handler(DashboardHandler)
 register_handler(BackupHandler)
 
 if __name__ == "__main__":
+    # examples
+    # pelican ~/agp/tpom pelican /tmp/remote/foo dashboard ~/agp/tpom backup ~/agp/tpom backup ~/Documents/me blogsync ~/agp/tpom /tmp/remote/foo
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
@@ -1302,3 +1307,5 @@ if __name__ == "__main__":
 
     os.nice(20)  # unlx only
     flow.run()
+
+
