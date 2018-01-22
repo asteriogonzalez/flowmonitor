@@ -17,7 +17,7 @@ TODO:
 """
 import codecs
 from collections import OrderedDict, deque
-from datetime import datetime, date
+from datetime import date, datetime
 from getpass import getuser
 import hashlib
 import logging
@@ -719,7 +719,6 @@ class SyncHandler(EventHandler):
                 # delete all files
                     # event = Event('deleted', filename, 0)
 
-
         # sync files that must be deleted
         if self.delete_missing:
             self._delete_missing()
@@ -1100,8 +1099,6 @@ class BackupHandler(EventHandler):
         self._reset_remote_checking = 0
 
         self.add_rule(INCLUDE, r'\.git$')
-        self.add_rule(EXCLUDE, r'nonexisting_path_1$')
-        self.add_rule(EXCLUDE, r'nonexisting_path_2$')
 
     def on_idle(self):
         "Performs syncing tasks"
@@ -1231,8 +1228,8 @@ class BackupHandler(EventHandler):
                 m = regexp.match(name)
                 if m:
                     m = m.groupdict()
-                    date = date.fromordinal(int(m['ordinal']))
-                    names = rotate_names(date, m['reponame'], m['ext'])
+                    d = date.fromordinal(int(m['ordinal']))
+                    names = rotate_names(d, m['reponame'], m['ext'])
                     name = os.path.join(remote_path, name)
                     matched_files.append(name)
                     for target in names:
