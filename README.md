@@ -50,20 +50,20 @@ The recommended use is to create a subclass and set the config in constructor.
 
 Example:
 
-```
-	class BlogSyncHandler(SyncHandler):
+```python
+class BlogSyncHandler(SyncHandler):
 
-	    def __init__(self, path, remotes):
-	        SyncHandler.__init__(self, path, remotes)
+    def __init__(self, path, remotes):
+        SyncHandler.__init__(self, path, remotes)
 
-	        self.add_rule(INCLUDE, r'.*\.svg$')
-	        self.add_rule(INCLUDE, r'.*\.py$')
-	        self.add_rule(INCLUDE, r'.*\.md$', r'Tags:\s*.*\W+(test)\W+.*')
-	        self.add_rule(INCLUDE, r'.*\.md$', r'Series:\s*.*\W+(vega)\W+.*')
+        self.add_rule(INCLUDE, r'.*\.svg$')
+        self.add_rule(INCLUDE, r'.*\.py$')
+        self.add_rule(INCLUDE, r'.*\.md$', r'Tags:\s*.*\W+(test)\W+.*')
+        self.add_rule(INCLUDE, r'.*\.md$', r'Series:\s*.*\W+(vega)\W+.*')
 
-	        self.add_rule(EXCLUDE, r'.*\.css$')  # an example :)
+        self.add_rule(EXCLUDE, r'.*\.css$')  # an example :)
 
-	        delete_missing = False
+        delete_missing = False
 
 ```
 
@@ -74,9 +74,9 @@ Example:
 Create a Dashboard of active and pending tasks exploring all markdown files.
 
 ```
-	- [ ] buy the milk tomorrow
-	+ [ ] writing this document today
-	- [x] already done task
+- [ ] buy the milk tomorrow
++ [ ] writing this document today
+- [x] already done task
 ```
 
 
@@ -93,14 +93,14 @@ The plugin has a rotation policy that maintain:
 - 1 file per year
 
 ```
-	project-736712.git.rar
-	project.d2.git.rar
-	project.d1.git.rar
-	project.d0.git.rar
-	project.w2.git.rar
-	project.w1.git.rar
-	project.m1.git.rar
-	project.y18.git.rar
+project-736712.git.rar
+project.d2.git.rar
+project.d1.git.rar
+project.d0.git.rar
+project.w2.git.rar
+project.w1.git.rar
+project.m1.git.rar
+project.y18.git.rar
 ```
 
 
