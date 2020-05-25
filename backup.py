@@ -93,27 +93,26 @@ class Runner(object):
 
         self.stdout, self.stderr = self.proc.communicate()
 
+    def run(cmd, **kw):
+        "Run a command and returns stdout and return code"
+        _ = kw.pop('timeout', None)  # not valid in 2.7
+        try:
+            proc = subprocess.Popen(
+                cmd, shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, **kw)
 
-def run(cmd, **kw):
-    "Run a command and returns stdout and return code"
-    _ = kw.pop('timeout', None)  # not valid in 2.7
-    try:
-        proc = subprocess.Popen(
-            cmd, shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, **kw)
+            stdout, _ = proc.communicate()
+            return stdout, proc.returncode
 
-        stdout, _ = proc.communicate()
-        return stdout, proc.returncode
-
-    except Exception, why:
-        print "ERROR: %s %s" % (cmd, kw)
-    return None, -1
+        except Exception, why:
+            print "ERROR: %s %s" % (cmd, kw)
+        return None, -1
 
 
 class MegaBackup(object):
-    """This class encapusulates the backup capabilities and
-    MEGA commands to upload and manage the remote files.
+    """This class encapusulates backup capabilities and manage remote files
+    using MEGA commands.
     """
     regsize = re.compile(r'\S+\s+(?P<size>\d+)')
     # compress_cmd = ['nice', '7z', 'a', '-phello', '-mhe', '-mx5',]
@@ -125,7 +124,8 @@ class MegaBackup(object):
     @classmethod
     def get_zip_name(cls, basename, today=None):
         today = today or date.today()
-        basename = '%s-%s.git.%s' % (basename, today.toordinal(), cls.zip_extension)
+        basename = '%s-%s.git.%s' % (basename, today.toordinal(),
+                                     cls.zip_extension)
         return basename
 
     def __init__(self, credentials=None):  # TODO: user credentials
@@ -256,7 +256,8 @@ class MegaBackup(object):
             if os.path.exists(zipfile):
                 os.unlink(zipfile)
 
-            cmd = clone_list(self.compress_cmd[self.zip_extension], zipfile, path)
+            cmd = clone_list(self.compress_cmd[self.zip_extension],
+                             zipfile, path)
             stdout, returncode = run(cmd)
 
             last_1 = max(get_modified(path, since=0), key=key)[1]
@@ -286,7 +287,8 @@ class MegaBackup(object):
             basename = self.get_zip_name(basename)
             zipfile = os.path.join('/tmp/', basename)
             if self.compress(git_path, zipfile):
-                cmd = clone_list(self.compress_cmd[self.zip_extension], zipfile)
+                cmd = clone_list(self.compress_cmd[self.zip_extension],
+                                 zipfile)
                 extrafiles = ['.gitignore', '.gitmodules']
                 for name in extrafiles:
                     name = os.path.join(parent, name)
